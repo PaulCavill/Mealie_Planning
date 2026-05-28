@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""
+Mealie helper CLI
+
+Commands:
+  suggest   Ask Claude AI to suggest meals and import them into Mealie
+  plan      Generate fortnightly meal plans (every 2nd week, starting this Saturday)
+  recipes   List all recipes in your Mealie library
+  week      Show this week's current meal plan
+  scrape    Import a recipe from a URL manually
+"""
+import argparse
+import sys
+from datetime import date
+from env_loader import load_dotenv
+
+load_dotenv()
+
+
+def cmd_suggest(args):
+    from suggester import run_suggest
+    run_suggest(count=args.count, dry_run=args.dry_run, restrictions=args.restrict or "")
+
+
+def cmd_plan(args):
+    from mealie_client import MealieClient
+    from planner import plan_fortnightly, print_plans, this_saturday
+
+    client = MealieClient()
+    start = date.fromisoformat(args.start) if args.start else this_saturday()
+    plans = plan_fortnightly(client, start=start, create_shopping_list=args.shopping_list)
+    print_plans(plans)
+
+
+def cmd_recipes(args):
+    from mealie_client import MealieClient
+    client = MealieClient()
+    recipes = client.list_recipes(per_page=100)
+    if not recipes:
+        print("No recipes found. Run 'suggest' to import some.")
+        return
+    print(f"\n{len(recipes)} recipes in your Mealie library:\n")
+    for r in sorted(recipes, key=lambda x: x["name"]):
+        servings = r.get("recipeServings") or "?"
+        print(f"  {r['name']:<50} ({servings} servings)  [{r['slug']}]")
+    print()
+
+
+def cmd_week(args):
+    from mealie_client import MealieClient
+    client = MealieClient()
+    entries = client.get_this_week()
+    if not entries:
+        print("No meal plan entries for this week.")
+        return
+    print(f"\nThis week's meal plan ({len(entries)} entries):\n")
+    for e in sorted(entries, key=lambda x: x.get("date", "")):
+        recipe_name = e.get("recipe", {}).get("name") if e.get("recipe") else e.get("title", "(no recipe)")
+        print(f"  {e['date']}  [{e.get('entryType', '?'):9}]  {recipe_name}")
+    print()
+
+
+def cmd_tag_dinners(args):
+    from mealie_client import MealieClient
+    client = MealieClient()
+    recipes = client.list_recipes(per_page=200)
+    print(f"\n{len(recipes)} total recipes. Tag which ones are dinners.\n")
+    print("Press y to tag as dinner, n to skip, q to quit.\n")
+    tagged = 0
+    for r in sorted(recipes, key=lambda x: x["name"]):
+        existing_tags = [t["name"] for t in (r.get("tags") or [])]
+        if "dinner" in existing_tags:
+            print(f"  [already tagged]  {r['name']}")
+            continue
+        answer = input(f"  Tag as dinner? {r['name']}  [y/n/q]: ").strip().lower()
+        if answer == "q":
+            break
+        if answer == "y":
+            client.add_tag(r["slug"], "dinner")
+            print(f"    -> Tagged.")
+            tagged += 1
+    print(f"\nDone. {tagged} recipes tagged as dinner.")
+
+
+def cmd_replace(args):
+    from mealie_client import MealieClient
+    from planner import replace_day
+    from datetime import date
+
+    client = MealieClient()
+    try:
+        target = date.fromisoformat(args.date)
+    except ValueError:
+        print(f"Invalid date '{args.date}'. Use YYYY-MM-DD format.")
+        sys.exit(1)
+    effort = args.effort
+    if effort is not None and not (1 <= effort <= 5):
+        print("--effort must be between 1 and 5.")
+        sys.exit(1)
+    replace_day(client, target, search=args.search, effort=effort)
+
+
+def cmd_tag_effort(args):
+    from mealie_client import MealieClient
+    from planner import tag_effort
+    client = MealieClient()
+    tag_effort(client)
+
+
+def cmd_scrape(args):
+    from mealie_client import MealieClient
+    from scraper import scrape_from_url, scrape_batch
+    client = MealieClient()
+    if args.file:
+        with open(args.file) as f:
+            urls = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        scrape_batch(client, urls, dry_run=args.dry_run)
+    elif args.url:
+        scrape_from_url(client, args.url, dry_run=args.dry_run)
+    else:
+        print("Provide a URL or --file.")
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Mealie AI meal planner")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # suggest
+    s = sub.add_parser("suggest", help="Ask Claude AI to suggest and import meals")
+    s.add_argument("--count", type=int, default=14, help="Number of meals to suggest (default: 14)")
+    s.add_argument("--dry-run", action="store_true", help="Preview suggestions without importing")
+    s.add_argument("--restrict", help="Additional constraint for Claude (e.g. 'no chicken')")
+    s.set_defaults(func=cmd_suggest)
+
+    # plan
+    p = sub.add_parser("plan", help="Generate fortnightly meal plans starting this Saturday")
+    p.add_argument("--start", help="Override start Saturday (YYYY-MM-DD)")
+    p.add_argument("--shopping-list", action="store_true", help="Also create shopping lists in Mealie")
+    p.set_defaults(func=cmd_plan)
+
+    # recipes
+    r = sub.add_parser("recipes", help="List all recipes in Mealie")
+    r.set_defaults(func=cmd_recipes)
+
+    # week
+    w = sub.add_parser("week", help="Show this week's meal plan")
+    w.set_defaults(func=cmd_week)
+
+    # tag-dinners
+    td = sub.add_parser("tag-dinners", help="Interactively tag existing recipes as dinner")
+    td.set_defaults(func=cmd_tag_dinners)
+
+    # replace
+    rp = sub.add_parser("replace", help="Replace the dinner for a specific date")
+    rp.add_argument("date", help="Date to replace (YYYY-MM-DD)")
+    rp.add_argument("--search", help="Filter recipe list by name")
+    rp.add_argument("--effort", type=int, metavar="N", help="Only show recipes with effort ≤ N (1-5)")
+    rp.set_defaults(func=cmd_replace)
+
+    # tag-effort
+    te = sub.add_parser("tag-effort", help="Interactively rate recipes with an effort level 1-5")
+    te.set_defaults(func=cmd_tag_effort)
+
+    # scrape
+    sc = sub.add_parser("scrape", help="Manually import a recipe from a URL")
+    sc.add_argument("url", nargs="?", help="Recipe URL to import")
+    sc.add_argument("--file", help="File with one URL per line")
+    sc.add_argument("--dry-run", action="store_true", help="Preview without importing")
+    sc.set_defaults(func=cmd_scrape)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
