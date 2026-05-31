@@ -34,13 +34,12 @@ An AI-powered meal planning tool for [Mealie](https://mealie.io). Uses Claude to
 ## Setup
 
 ```bash
-# Clone and enter the project
+# Enter the project directory
 cd Mealie
 
 # Create virtualenv and install dependencies
 uv venv .venv
 uv pip install -r requirements.txt
-uv pip install anthropic ddgs
 ```
 
 Copy `.env.example` to `.env` and fill in your values:
@@ -49,13 +48,7 @@ Copy `.env.example` to `.env` and fill in your values:
 cp .env.example .env
 ```
 
-```ini
-MEALIE_BASE_URL=http://your-mealie-instance:9090
-MEALIE_TOKEN=your_long_lived_api_token
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-> Get a Mealie API token from **Profile → API Tokens** in the Mealie UI. Long-lived tokens are recommended.
+Get a Mealie API token from **Profile → API Tokens** in the Mealie UI (long-lived tokens recommended), and an Anthropic API key from [console.anthropic.com](https://console.anthropic.com).
 
 ## Usage
 
@@ -156,6 +149,16 @@ Walks through all recipes and lets you set an effort level 1–5. New recipes fr
 .venv/bin/python main.py scrape --file urls.txt
 ```
 
+### `parse-ingredients` — Parse recipe ingredients
+
+Parses all recipe ingredient notes (e.g., `"500g chicken"`) into structured fields (quantity, unit, food) for better shopping list support in Mealie.
+
+```bash
+.venv/bin/python main.py parse-ingredients
+```
+
+This is called automatically after `suggest` imports recipes, but can be run manually on older recipes.
+
 ## Project structure
 
 ```
@@ -185,6 +188,7 @@ Mealie/
 
 ## Notes
 
-- Mealie does not preserve `prepTime`/`cookTime`/`totalTime` from schema.org JSON after import. Effort is rated by Claude from the recipe content, not parsed from durations.
-- The `dinner` tag is used to filter the recipe library for planning. Non-dinner recipes (oats, sauces, biscuits) won't appear in meal plans.
-- The `replace` command checks the full 6-week upcoming plan before confirming a swap, to avoid duplicating a recipe already planned on another day.
+- **Mealie time fields** — Mealie does not preserve `prepTime`/`cookTime`/`totalTime` from schema.org JSON after import. Effort is rated by Claude from the recipe content, not parsed from durations.
+- **Dinner filtering** — The `dinner` tag filters the recipe library for planning. Non-dinner recipes (oats, sauces, biscuits) won't appear in meal plans.
+- **Duplicate checking** — The `replace` command checks the full 6-week upcoming plan to avoid duplicating recipes already planned on other days.
+- **Ingredient parsing** — All recipes have ingredient notes (e.g., `"500g chicken"`) automatically parsed into structured quantity/unit fields via the `parse-ingredients` command. This is called automatically after `suggest` imports recipes. The `/api/parser/ingredients` endpoint populates these fields for proper shopping list support.

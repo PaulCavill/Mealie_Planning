@@ -1,9 +1,50 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
+import re
 import requests
 
 if TYPE_CHECKING:
     from .client import MealieClient
+
+
+def parse_ingredient_note(note: str) -> dict:
+    """Parse ingredient note into Mealie's structured format: {quantity, unit, food, note}.
+
+    Examples:
+    - "500g chicken breast, diced" → {quantity: 500.0, unit: {name: "g"}, food: {name: "chicken breast"}, note: "diced"}
+    - "2 tbsp olive oil" → {quantity: 2.0, unit: {name: "tbsp"}, food: {name: "olive oil"}, note: ""}
+    - "1/2 teaspoon salt" → {quantity: 0.5, unit: {name: "teaspoon"}, food: {name: "salt"}, note: ""}
+    """
+    note = (note or "").strip()
+    if not note:
+        return {"quantity": 0, "unit": None, "food": None, "note": ""}
+
+    quantity = 0
+    unit = None
+    food = None
+    notes = ""
+
+    # Match "amount unit food [, notes]" pattern
+    match = re.match(r'^([\d.]+(?:/[\d.]+)?)\s*([a-zA-Z]*)\s+(.+?)(?:\s*,\s*(.+))?$', note)
+    if match:
+        amount_str, unit_str, rest, notes = match.groups()
+        try:
+            if '/' in match.group(1):
+                parts = match.group(1).split('/')
+                quantity = float(parts[0]) / float(parts[1])
+            else:
+                quantity = float(amount_str)
+        except (ValueError, ZeroDivisionError):
+            quantity = 1
+        if unit_str:
+            unit = {"name": unit_str.strip()}
+        if rest:
+            food = {"name": rest.strip()}
+        notes = notes.strip() if notes else ""
+    else:
+        food = {"name": note}
+
+    return {"quantity": quantity, "unit": unit, "food": food, "note": notes or ""}
 
 
 
@@ -118,3 +159,84 @@ class RecipesMixin:
     def search_recipes(self: "MealieClient", query: str) -> list[dict]:
         data = self.get("/api/recipes", search=query, perPage=20)
         return data.get("items", [])
+
+    def update_recipe_ingredients(self: "MealieClient", slug: str) -> dict:
+        """Parse and populate ingredient quantity/unit/food fields using Mealie's NLP parser.
+
+        Steps:
+        1. Parse ingredient notes using Mealie's NLP parser
+        2. For each parsed food with id=null, create it in the database
+        3. Set quantity, unit, food (with valid id), and prep note on ingredient
+        4. PUT recipe back
+
+        Skips ingredients with empty notes (they can't be parsed).
+        """
+        recipe = self.get_recipe(slug)
+        ingredients = recipe.get("recipeIngredient", [])
+
+        # Separate ingredients into parseable and non-parseable
+        parseable_indices = []
+        parseable_notes = []
+
+        for i, ing in enumerate(ingredients):
+            note = ing.get("note", "").strip()
+            if note:  # Only parse non-empty notes
+                parseable_indices.append(i)
+                parseable_notes.append(note)
+
+        if not parseable_notes:
+            return recipe  # Nothing to parse
+
+        # Parse all non-empty ingredients at once using Mealie's NLP parser
+        try:
+            parse_results = self.post(
+                "/api/parser/ingredients",
+                json={"parser": "nlp", "ingredients": parseable_notes}
+            )
+            # Parser returns a list of {input, confidence, ingredient} objects
+            parsed_ings = [r.get("ingredient", {}) for r in (parse_results if isinstance(parse_results, list) else [])]
+        except Exception:
+            return recipe  # Return unchanged if parsing fails
+
+        # Update only the parseable ingredients with their parsed data
+        for idx, parsed_ing in zip(parseable_indices, parsed_ings):
+            if not parsed_ing:
+                continue
+
+            orig_ing = ingredients[idx]
+
+            # Set quantity and unit from parser
+            orig_ing["quantity"] = parsed_ing.get("quantity", 0)
+            orig_ing["unit"] = parsed_ing.get("unit")
+
+            # Handle food: if parser returned a food with id=null, create it first
+            food_obj = parsed_ing.get("food")
+            if food_obj and isinstance(food_obj, dict):
+                food_name = food_obj.get("name", "")
+                food_id = food_obj.get("id")
+
+                # If food has no id, create it
+                if food_name and not food_id:
+                    created_food = self.create_or_get_food(food_name)
+                    orig_ing["food"] = created_food
+                else:
+                    # Food already exists or is incomplete, use as-is
+                    orig_ing["food"] = food_obj
+
+            # Set note to just the prep instructions (parser separates quantity/unit/food/note)
+            orig_ing["note"] = parsed_ing.get("note", "")
+
+        # PUT the updated recipe back
+        try:
+            self.put(f"/api/recipes/{slug}", json=recipe)
+            return recipe
+        except Exception as e:
+            print(f"\n⚠️  ERROR: Failed to save parsed ingredients for '{recipe.get('name')}'")
+            print(f"   Error: {e}")
+            print(f"\n   Parsed ingredients are ready but couldn't be saved to database.")
+            print(f"   Please:")
+            print(f"   1. Confirm the recipe state in Mealie UI")
+            print(f"   2. Check if there are data issues preventing the update")
+            print(f"   3. Manually parse ingredients via Mealie's parser UI if needed")
+            print(f"   Recipe: {recipe.get('name')} ({slug})\n")
+            raise

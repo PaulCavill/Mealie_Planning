@@ -3,11 +3,15 @@
 Mealie helper CLI
 
 Commands:
-  suggest   Ask Claude AI to suggest meals and import them into Mealie
-  plan      Generate fortnightly meal plans (every 2nd week, starting this Saturday)
-  recipes   List all recipes in your Mealie library
-  week      Show this week's current meal plan
-  scrape    Import a recipe from a URL manually
+  suggest             Ask Claude AI to suggest meals and import them into Mealie
+  plan                Generate fortnightly meal plans (every 2nd week, starting this Saturday)
+  recipes             List all recipes in your Mealie library
+  week                Show this week's current meal plan
+  tag-dinners         Interactively mark recipes as dinner
+  tag-effort          Rate recipes by effort level (1-5)
+  replace             Replace a day's meal in the plan
+  scrape              Import a recipe from a URL manually
+  parse-ingredients   Parse all recipe ingredients to populate quantity/unit fields
 """
 import argparse
 import sys
@@ -122,6 +126,38 @@ def cmd_scrape(args):
         sys.exit(1)
 
 
+def cmd_parse_ingredients(args):
+    from mealie_client import MealieClient
+
+    client = MealieClient()
+    recipes = client.list_recipes(per_page=200)
+
+    if not recipes:
+        print("No recipes found.")
+        return
+
+    print(f"\nParsing ingredients for {len(recipes)} recipes...\n")
+    success = 0
+    failed = 0
+    failed_recipes = []
+
+    for i, recipe in enumerate(sorted(recipes, key=lambda x: x["name"]), 1):
+        try:
+            client.update_recipe_ingredients(recipe["slug"])
+            print(f"  {i:>3}. ✓ {recipe['name']}")
+            success += 1
+        except Exception as e:
+            print(f"  {i:>3}. ✗ {recipe['name']}")
+            failed += 1
+            failed_recipes.append(recipe['name'])
+
+    print(f"\nDone: {success} parsed, {failed} failed.")
+    if failed_recipes:
+        print(f"\nFailed recipes (check Mealie UI and parse manually if needed):")
+        for name in failed_recipes:
+            print(f"  - {name}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Mealie AI meal planner")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -168,6 +204,10 @@ def main():
     sc.add_argument("--file", help="File with one URL per line")
     sc.add_argument("--dry-run", action="store_true", help="Preview without importing")
     sc.set_defaults(func=cmd_scrape)
+
+    # parse-ingredients
+    pi = sub.add_parser("parse-ingredients", help="Parse ingredients in all recipes to populate quantity/unit")
+    pi.set_defaults(func=cmd_parse_ingredients)
 
     args = parser.parse_args()
     args.func(args)

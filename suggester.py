@@ -142,6 +142,7 @@ def run_suggest(count: int = 14, dry_run: bool = False, restrictions: str = "") 
                 mealie.set_effort_tag(slug, effort)
             ingredients = recipe.get("recipeIngredient", [])
             mealie.add_cover_image(slug, name, cuisine, ingredients)
+            mealie.update_recipe_ingredients(slug)
             effort_str = f" effort-{effort}" if isinstance(effort, int) and 1 <= effort <= 5 else ""
             print(f"  OK: '{imported.get('name', name)}' ({cuisine}){effort_str}")
             results.append({"name": imported.get("name", name), "status": "imported", "slug": slug})

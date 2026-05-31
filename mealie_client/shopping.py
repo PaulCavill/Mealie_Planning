@@ -19,9 +19,14 @@ class ShoppingMixin:
         return self.post("/api/households/shopping/lists", json={"name": name})
 
     def add_recipe_to_list(self: "MealieClient", list_id: str, recipe_id: str, scale: float = 1.0) -> dict:
+        """Add recipe ingredients to a shopping list with scaling.
+
+        Note: Mealie's API expects a list of recipe requests, even for a single recipe.
+        Ingredients are combined based on their parsed Amount/Unit/Food structure.
+        """
         return self.post(
             f"/api/households/shopping/lists/{list_id}/recipe",
-            json={"recipeId": recipe_id, "recipeIncrementQuantity": scale},
+            json=[{"recipeId": recipe_id, "recipeIncrementQuantity": scale}],
         )
 
     def get_list_items(self: "MealieClient", list_id: str) -> list[dict]:
@@ -33,3 +38,4 @@ class ShoppingMixin:
             "/api/households/shopping/items",
             json={"shoppingListId": list_id, "note": note, "quantity": quantity, "checked": False},
         )
+

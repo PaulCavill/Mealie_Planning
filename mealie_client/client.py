@@ -4,9 +4,10 @@ from typing import Optional
 from .recipes import RecipesMixin
 from .meal_plans import MealPlansMixin
 from .shopping import ShoppingMixin
+from .foods import FoodsMixin
 
 
-class MealieClient(RecipesMixin, MealPlansMixin, ShoppingMixin):
+class MealieClient(RecipesMixin, MealPlansMixin, ShoppingMixin, FoodsMixin):
     def __init__(self, base_url: Optional[str] = None, token: Optional[str] = None):
         self.base_url = (base_url or os.environ["MEALIE_BASE_URL"]).rstrip("/")
         self._token = token or os.environ.get("MEALIE_TOKEN")
