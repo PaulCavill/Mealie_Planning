@@ -2,23 +2,19 @@
 Weekly meal planner.
 
 Rules:
-- Weeks run Saturday → Friday
-- Thursday: "Takeaways" (fixed note, no recipe)
-- Friday: "Make your own meals" (fixed note, no recipe)
+- Weeks run Saturday → Thursday
 - Sat/Sun/Mon/Tue/Wed: dinner from Mealie recipe library
 - Plan every second week starting this Saturday
-- Household: 2 adults + 1 child (servings scaled to 2.5)
+- Household: 3 adults + 1 child (servings scaled to 3.5)
 - Effort rules: Mon/Wed capped at effort ≤ 3; Sat/Sun/Tue unrestricted
 """
 import random
 from datetime import date, timedelta
 from mealie_client import MealieClient
 
-HOUSEHOLD = {"adults": 2, "children": 1}
+HOUSEHOLD = {"adults": 3, "children": 1}
 EFFECTIVE_SERVINGS = HOUSEHOLD["adults"] + HOUSEHOLD["children"] * 0.5  # 2.5
 
-THURSDAY = 3  # weekday index (Mon=0)
-FRIDAY = 4
 SATURDAY = 5
 
 # Max effort allowed per weekday (Mon=0 … Sun=6). Omitted = no restriction.
@@ -67,18 +63,59 @@ def plan_week(
     week_start: date,
     used_slugs: set,
     create_shopping_list: bool = False,
+    override_plan: bool = False,
 ) -> dict:
     recipes = client.list_dinner_recipes()
     if not recipes:
         raise ValueError("No recipes tagged 'dinner' in Mealie. Run 'suggest' or 'tag-dinners' first.")
 
+    # Fetch existing meal plans for this week to prevent duplicates
+    week_end = week_start + timedelta(days=4)
+    existing_entries = client.list_meal_plans(week_start, week_end)
+    existing_by_date = {e.get("date"): e for e in existing_entries if e.get("entryType") == "dinner"}
+
+    # If override_plan is set, delete existing entries
+    if override_plan:
+        for day_iso, entry in existing_by_date.items():
+            client.delete_meal_plan_entry(entry["id"])
+            print(f"    Deleted existing {entry.get('recipe', {}).get('name', entry.get('title', '(unknown)'))} from {day_iso}")
+        existing_by_date.clear()
+
+    # Exclude recipes used in the last 40 days
+    lookback_start = week_start - timedelta(days=40)
+    recent_meals = client.list_meal_plans(lookback_start, week_start - timedelta(days=1))
+    recent_recipe_ids = {
+        e.get("recipe", {}).get("id")
+        for e in recent_meals
+        if e.get("entryType") == "dinner" and e.get("recipe")
+    }
+
     entries = []
 
     # --- 5 recipe days (Sat → Wed) ---
     for day in days_needing_recipes(week_start):
-        available = [r for r in recipes if r["slug"] not in used_slugs]
+        day_iso = day.isoformat()
+
+        # Skip if a dinner entry already exists for this day
+        if day_iso in existing_by_date:
+            existing_entry = existing_by_date[day_iso]
+            recipe_name = existing_entry.get("recipe", {}).get("name") if existing_entry.get("recipe") else existing_entry.get("title", "(unknown)")
+            print(f"    Skipped {day.strftime('%A')} — already planned: {recipe_name}")
+            entries.append({
+                "date": day_iso,
+                "day": day.strftime("%A"),
+                "type": "existing",
+                "recipe_name": recipe_name,
+                "recipe_id": existing_entry.get("recipe", {}).get("id"),
+                "entry_id": existing_entry.get("id"),
+            })
+            continue
+
+        available = [r for r in recipes if r["slug"] not in used_slugs and r["id"] not in recent_recipe_ids]
         if not available:
             used_slugs.clear()
+            available = [r for r in recipes if r["id"] not in recent_recipe_ids]
+        if not available:
             available = recipes
 
         # Apply per-day effort cap
@@ -100,7 +137,7 @@ def plan_week(
             recipe_id=recipe["id"],
         )
         entries.append({
-            "date": day.isoformat(),
+            "date": day_iso,
             "day": day.strftime("%A"),
             "type": "recipe",
             "recipe_name": recipe["name"],
@@ -111,33 +148,26 @@ def plan_week(
             "effort": _get_effort(recipe),
         })
 
-    # --- Thursday: Takeaways ---
-    thu = week_start + timedelta(days=5)
-    entry = client.add_meal_plan_entry(
-        plan_date=thu,
-        entry_type="dinner",
-        title="Takeaways",
-    )
-    entries.append({"date": thu.isoformat(), "day": "Thursday", "type": "note", "recipe_name": "Takeaways", "entry_id": entry.get("id")})
-
-    # --- Friday: Make your own ---
-    fri = week_start + timedelta(days=6)
-    entry = client.add_meal_plan_entry(
-        plan_date=fri,
-        entry_type="dinner",
-        title="Make your own meals",
-    )
-    entries.append({"date": fri.isoformat(), "day": "Friday", "type": "note", "recipe_name": "Make your own meals", "entry_id": entry.get("id")})
-
     result = {"week_start": week_start.isoformat(), "entries": entries}
 
     if create_shopping_list:
         name = f"Week of {week_start.strftime('%d %b %Y')}"
+
+        # Delete existing shopping list with the same name if it exists
+        existing_lists = client.list_shopping_lists()
+        for existing in existing_lists:
+            if existing.get("name") == name:
+                client.delete_shopping_list(existing["id"])
+                print(f"    Deleted existing shopping list: {name}")
+                break
+
         sl = client.create_shopping_list(name)
         list_id = sl["id"]
         for e in entries:
-            if e["type"] == "recipe":
-                client.add_recipe_to_list(list_id, e["recipe_id"], scale=e["scale_factor"])
+            recipe_id = e.get("recipe_id")
+            if recipe_id:
+                scale = e.get("scale_factor", 1.0)
+                client.add_recipe_to_list(list_id, recipe_id, scale=scale)
         result["shopping_list_id"] = list_id
         result["shopping_list_name"] = name
 
@@ -148,6 +178,7 @@ def plan_fortnightly(
     client: MealieClient,
     start: date = None,
     create_shopping_list: bool = False,
+    override_plan: bool = False,
 ) -> list[dict]:
     """Plan every second week for 4 weeks (2 plans total)."""
     saturdays = planned_saturdays(start)
@@ -155,7 +186,7 @@ def plan_fortnightly(
     plans = []
     for sat in saturdays:
         print(f"  Planning week of {sat.strftime('%d %b %Y')}...")
-        plan = plan_week(client, sat, used_slugs, create_shopping_list=create_shopping_list)
+        plan = plan_week(client, sat, used_slugs, create_shopping_list=create_shopping_list, override_plan=override_plan)
         plans.append(plan)
     return plans
 

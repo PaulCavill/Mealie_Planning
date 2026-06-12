@@ -5,18 +5,17 @@ An AI-powered meal planning tool for [Mealie](https://mealie.io). Uses Claude to
 ## Features
 
 - **Recipe generation** — Claude generates full recipes (ingredients, steps, times) and imports them directly into Mealie. No URL scraping.
-- **Cover images** — DuckDuckGo image search finds a relevant photo for each recipe automatically.
+- **Cover images** — DuckDuckGo image search finds a relevant photo for each recipe automatically. Refresh unrelated images anytime with `replace-image`.
 - **Effort rating** — Recipes are tagged `effort-1` (quick) through `effort-5` (time-intensive). Claude rates new recipes on import; existing ones can be rated interactively or auto-rated in bulk.
 - **Smart planning** — Fortnightly dinner plans with per-day effort rules: easy meals on Monday/Wednesday, anything goes on Saturday/Sunday/Tuesday.
 - **Day replacement** — Replace any planned meal interactively, with duplicate checking across the full upcoming plan.
+- **Image refresh** — Replace recipe cover images when they don't match the meal, with one command.
 
 ## Household rules
 
 | Day | Rule |
 |-----|------|
 | Saturday, Sunday, Monday, Tuesday, Wednesday | Dinner recipe from Mealie library |
-| Thursday | Takeaways (fixed note) |
-| Friday | Make your own meals (fixed note) |
 
 **Effort constraints:**
 - Monday, Wednesday → effort ≤ 3
@@ -60,7 +59,7 @@ All commands are run via `main.py`:
 
 ### `suggest` — Generate and import recipes
 
-Ask Claude to generate dinner recipes and import them into Mealie. Each recipe is automatically tagged `dinner`, rated for effort, and given a cover photo.
+Ask Claude to generate dinner recipes and import them into Mealie. Each recipe is automatically tagged `dinner`, rated for effort, and given a cover photo. Duplicates are prevented — if a recipe with the same name already exists, it will be skipped.
 
 ```bash
 # Generate 14 recipes (default)
@@ -76,9 +75,14 @@ Ask Claude to generate dinner recipes and import them into Mealie. Each recipe i
 .venv/bin/python main.py suggest --dry-run
 ```
 
+**Notes:**
+- Claude generates recipes with real, publicly accessible source URLs
+- Recipes with ingredient parsing failures are still imported; use `parse-ingredients` to retry
+- Duplicate recipes are skipped automatically, even if a previous import partially failed
+
 ### `plan` — Create a fortnightly meal plan
 
-Picks dinner recipes from your library and creates entries in Mealie for the next two fortnights. Respects effort rules per day and avoids repeating recipes within a plan.
+Picks dinner recipes from your library and creates entries in Mealie for the next two fortnights. Respects effort rules per day, avoids repeating recipes within 40 days, and prevents duplicate entries when run multiple times.
 
 ```bash
 .venv/bin/python main.py plan
@@ -88,7 +92,15 @@ Picks dinner recipes from your library and creates entries in Mealie for the nex
 
 # Also create shopping lists in Mealie
 .venv/bin/python main.py plan --shopping-list
+
+# Replace existing meals (deletes old plan and creates new one)
+.venv/bin/python main.py plan --start 2026-06-07 --override-plan
 ```
+
+**Behavior:**
+- Skips dates that already have planned dinners (prevents duplicates when run multiple times)
+- Excludes recipes used in the last 40 days (ensures variety across planning cycles)
+- With `--shopping-list`: deletes old shopping list for that week and creates a fresh one
 
 ### `replace` — Replace a day's meal
 
@@ -140,6 +152,27 @@ Walks through all recipes and lets you set an effort level 1–5. New recipes fr
 | 4 | Involved — 50–75 min, marinating or multiple steps |
 | 5 | Time-intensive — 75+ min or complex technique |
 
+### `replace-image` — Replace recipe cover images
+
+Interactively replace recipe cover images by searching DuckDuckGo for better-matching photos. Useful when auto-generated images don't match the recipe or are unrelated.
+
+```bash
+# Replace images for all recipes (interactive)
+.venv/bin/python main.py replace-image
+
+# Filter by recipe name
+.venv/bin/python main.py replace-image --search pork
+
+# Batch mode with automation
+echo "y" | .venv/bin/python main.py replace-image --search pasta
+```
+
+**Behavior:**
+- Searches DuckDuckGo for images matching the recipe name and key ingredients
+- Validates images (minimum size, correct content-type) to avoid placeholders
+- Replaces the current cover image with the best match found
+- Skips recipes if no suitable image is found
+
 ### `scrape` — Import a recipe from a URL
 
 ```bash
@@ -151,13 +184,19 @@ Walks through all recipes and lets you set an effort level 1–5. New recipes fr
 
 ### `parse-ingredients` — Parse recipe ingredients
 
-Parses all recipe ingredient notes (e.g., `"500g chicken"`) into structured fields (quantity, unit, food) for better shopping list support in Mealie.
+Parses all recipe ingredient notes (e.g., `"500g chicken"`) into structured fields (quantity, unit, food) for better shopping list support in Mealie. Missing units (e.g., "tin", "can") and foods are created automatically during parsing.
 
 ```bash
 .venv/bin/python main.py parse-ingredients
 ```
 
 This is called automatically after `suggest` imports recipes, but can be run manually on older recipes.
+
+**Behavior:**
+- Uses Mealie's NLP parser to extract quantity, unit, food, and prep notes
+- Creates missing units and foods on-the-fly (e.g., "tin" unit is created if missing)
+- Sets quantity/unit/food/note fields for proper shopping list ingredient combination
+- Skips recipes with data issues and continues batch processing
 
 ## Project structure
 
@@ -170,12 +209,15 @@ Mealie/
 ├── env_loader.py        # Minimal .env parser (no external deps)
 ├── requirements.txt
 ├── .env.example
+├── CLAUDE.md            # Project documentation for Claude
+├── README.md            # This file
 └── mealie_client/       # Mealie API client package
     ├── __init__.py
     ├── client.py        # Base client (auth, get/post/put/delete, multipart upload)
-    ├── recipes.py       # Recipe CRUD, tagging, effort tags, cover images
+    ├── recipes.py       # Recipe CRUD, tagging, effort tags, cover images, ingredient parsing
     ├── meal_plans.py    # Meal plan CRUD
-    └── shopping.py      # Shopping list operations
+    ├── shopping.py      # Shopping list operations
+    └── foods.py         # Food & unit creation (on-demand during ingredient parsing)
 ```
 
 ## How recipe generation works
@@ -190,5 +232,8 @@ Mealie/
 
 - **Mealie time fields** — Mealie does not preserve `prepTime`/`cookTime`/`totalTime` from schema.org JSON after import. Effort is rated by Claude from the recipe content, not parsed from durations.
 - **Dinner filtering** — The `dinner` tag filters the recipe library for planning. Non-dinner recipes (oats, sauces, biscuits) won't appear in meal plans.
-- **Duplicate checking** — The `replace` command checks the full 6-week upcoming plan to avoid duplicating recipes already planned on other days.
-- **Ingredient parsing** — All recipes have ingredient notes (e.g., `"500g chicken"`) automatically parsed into structured quantity/unit fields via the `parse-ingredients` command. This is called automatically after `suggest` imports recipes. The `/api/parser/ingredients` endpoint populates these fields for proper shopping list support.
+- **Recipe rotation** — The planner excludes recipes used in the last 40 days to ensure variety across planning cycles.
+- **Duplicate prevention** — Running `plan` multiple times safely skips dates that already have meals. Use `--override-plan` to replace existing plans. The `suggest` command skips recipes already in your library.
+- **Shopping lists** — Old shopping lists for the same week are deleted and recreated when `--shopping-list` is used, ensuring they match the current meal plan.
+- **Ingredient parsing** — All recipes have ingredient notes (e.g., `"500g chicken"`) automatically parsed into structured quantity/unit fields. Missing units and foods are created on-the-fly during parsing, preventing 500 errors. The `parse-ingredients` command runs automatically after `suggest` imports recipes and can be run manually on older recipes.
+- **Source URLs** — Claude-generated recipes include real, publicly accessible source URLs (e.g., allrecipes.com, bbc.co.uk/food). These are stored in the recipe data and printed during import.

@@ -17,7 +17,7 @@ def scrape_from_url(client: MealieClient, url: str, dry_run: bool = False) -> di
 
     print(f"  Importing: {url}")
     recipe = client.scrape_recipe(url)
-    print(f"  -> Imported '{recipe['name']}' ({recipe['slug']})")
+    print(f"  -> Imported '{recipe['name']}' ({recipe['slug']}) [source: {url}]")
     return recipe
 
 

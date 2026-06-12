@@ -9,7 +9,7 @@ import json
 import anthropic
 from mealie_client import MealieClient
 
-HOUSEHOLD = "2 adults and 1 child (approx. 8 years old), based in New Zealand"
+HOUSEHOLD = "3 adults and 1 child (approx. 13 years old), based in New Zealand"
 
 SYSTEM_PROMPT = """You are a meal planning assistant. Generate detailed dinner recipes in schema.org/Recipe JSON-LD format.
 
@@ -21,11 +21,14 @@ Rules:
 - Realistic ingredient quantities for 4 servings
 - Clear, numbered step-by-step instructions
 - Avoid recipes already in the library: {existing}
+- Only suggest recipes you know have a real, publicly accessible source URL
+  (e.g. from allrecipes.com, bbc.co.uk/food, recipetineats.com, etc.)
+- Include that URL as the "url" field. Never fabricate a URL.
 
 Return ONLY a JSON array of schema.org/Recipe objects. Each must include:
   @context, @type, name, description, recipeYield, prepTime, cookTime, totalTime,
   recipeIngredient (array of strings), recipeInstructions (array of HowToStep objects),
-  recipeCategory, recipeCuisine, keywords, effort
+  recipeCategory, recipeCuisine, keywords, effort, url
 
 effort is an integer 1-5 rating the total time and complexity:
   1 = very quick, ≤20 min, minimal prep (e.g. simple stir-fry, pasta aglio e olio)
@@ -47,6 +50,7 @@ Example of one item:
   "recipeCuisine": "Indian",
   "recipeCategory": "Dinner",
   "keywords": "chicken, curry, family friendly",
+  "url": "https://www.allrecipes.com/recipe/12345/butter-chicken/",
   "recipeIngredient": [
     "600g chicken thighs, cut into chunks",
     "1 cup tomato passata",
@@ -124,6 +128,9 @@ def run_suggest(count: int = 14, dry_run: bool = False, restrictions: str = "") 
     print(f"\nImporting {len(recipes)} recipes into Mealie...\n")
     results = []
 
+    # Get current recipes to check for duplicates
+    current_recipes = {r["name"].lower() for r in mealie.list_recipes(per_page=200)}
+
     for recipe in recipes:
         name = recipe.get("name", "Unknown")
         cuisine = recipe.get("recipeCuisine", "")
@@ -133,7 +140,14 @@ def run_suggest(count: int = 14, dry_run: bool = False, restrictions: str = "") 
             results.append({"name": name, "status": "dry-run"})
             continue
 
+        # Check if recipe with this name already exists
+        if name.lower() in current_recipes:
+            print(f"  SKIP: '{name}' — already exists in Mealie")
+            results.append({"name": name, "status": "skipped"})
+            continue
+
         try:
+            source_url = recipe.get("url")
             imported = import_recipe_json(mealie, recipe)
             slug = imported.get("slug")
             mealie.add_tag(slug, "dinner")
@@ -144,7 +158,8 @@ def run_suggest(count: int = 14, dry_run: bool = False, restrictions: str = "") 
             mealie.add_cover_image(slug, name, cuisine, ingredients)
             mealie.update_recipe_ingredients(slug)
             effort_str = f" effort-{effort}" if isinstance(effort, int) and 1 <= effort <= 5 else ""
-            print(f"  OK: '{imported.get('name', name)}' ({cuisine}){effort_str}")
+            source_note = f" [source: {source_url}]" if source_url else ""
+            print(f"  OK: '{imported.get('name', name)}' ({cuisine}){effort_str}{source_note}")
             results.append({"name": imported.get("name", name), "status": "imported", "slug": slug})
         except Exception as e:
             print(f"  FAIL: {name} — {e}")

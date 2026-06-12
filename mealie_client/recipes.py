@@ -205,9 +205,24 @@ class RecipesMixin:
 
             orig_ing = ingredients[idx]
 
-            # Set quantity and unit from parser
+            # Set quantity from parser
             orig_ing["quantity"] = parsed_ing.get("quantity", 0)
-            orig_ing["unit"] = parsed_ing.get("unit")
+
+            # Handle unit: if parser returned a unit with id=null, create it first
+            unit_obj = parsed_ing.get("unit")
+            if unit_obj and isinstance(unit_obj, dict):
+                unit_name = unit_obj.get("name", "")
+                unit_id = unit_obj.get("id")
+
+                # If unit has no id, create it
+                if unit_name and not unit_id:
+                    created_unit = self.create_or_get_unit(unit_name)
+                    orig_ing["unit"] = created_unit
+                else:
+                    # Unit already exists, use as-is
+                    orig_ing["unit"] = unit_obj
+            else:
+                orig_ing["unit"] = unit_obj
 
             # Handle food: if parser returned a food with id=null, create it first
             food_obj = parsed_ing.get("food")

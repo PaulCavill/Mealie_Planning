@@ -10,6 +10,7 @@ Commands:
   tag-dinners         Interactively mark recipes as dinner
   tag-effort          Rate recipes by effort level (1-5)
   replace             Replace a day's meal in the plan
+  replace-image       Replace recipe cover images (search DuckDuckGo for new ones)
   scrape              Import a recipe from a URL manually
   parse-ingredients   Parse all recipe ingredients to populate quantity/unit fields
 """
@@ -32,7 +33,7 @@ def cmd_plan(args):
 
     client = MealieClient()
     start = date.fromisoformat(args.start) if args.start else this_saturday()
-    plans = plan_fortnightly(client, start=start, create_shopping_list=args.shopping_list)
+    plans = plan_fortnightly(client, start=start, create_shopping_list=args.shopping_list, override_plan=args.override_plan)
     print_plans(plans)
 
 
@@ -158,6 +159,47 @@ def cmd_parse_ingredients(args):
             print(f"  - {name}")
 
 
+def cmd_replace_image(args):
+    from mealie_client import MealieClient
+
+    client = MealieClient()
+    recipes = client.list_recipes(per_page=200)
+
+    if not recipes:
+        print("No recipes found.")
+        return
+
+    recipes_sorted = sorted(recipes, key=lambda x: x["name"])
+
+    if args.search:
+        recipes_sorted = [r for r in recipes_sorted if args.search.lower() in r["name"].lower()]
+        if not recipes_sorted:
+            print(f"No recipes found matching '{args.search}'.")
+            return
+
+    print(f"\nFound {len(recipes_sorted)} recipes. Select which to replace images for.\n")
+    print("Press y to replace image, n to skip, q to quit.\n")
+
+    replaced = 0
+    for r in recipes_sorted:
+        answer = input(f"  Replace image for '{r['name']}'? [y/n/q]: ").strip().lower()
+        if answer == "q":
+            break
+        if answer == "y":
+            print(f"    Searching for image...")
+            try:
+                success = client.add_cover_image(r["slug"], r["name"], ingredients=r.get("recipeIngredient"))
+                if success:
+                    print(f"    ✓ Image replaced.")
+                    replaced += 1
+                else:
+                    print(f"    ✗ Could not find suitable image (no matching results or download failed).")
+            except Exception as e:
+                print(f"    ✗ Error: {e}")
+
+    print(f"\nDone. {replaced} images replaced.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Mealie AI meal planner")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -173,6 +215,7 @@ def main():
     p = sub.add_parser("plan", help="Generate fortnightly meal plans starting this Saturday")
     p.add_argument("--start", help="Override start Saturday (YYYY-MM-DD)")
     p.add_argument("--shopping-list", action="store_true", help="Also create shopping lists in Mealie")
+    p.add_argument("--override-plan", action="store_true", help="Replace existing meal plans for these dates")
     p.set_defaults(func=cmd_plan)
 
     # recipes
@@ -208,6 +251,11 @@ def main():
     # parse-ingredients
     pi = sub.add_parser("parse-ingredients", help="Parse ingredients in all recipes to populate quantity/unit")
     pi.set_defaults(func=cmd_parse_ingredients)
+
+    # replace-image
+    ri = sub.add_parser("replace-image", help="Interactively replace recipe cover images")
+    ri.add_argument("--search", help="Filter recipe list by name")
+    ri.set_defaults(func=cmd_replace_image)
 
     args = parser.parse_args()
     args.func(args)
