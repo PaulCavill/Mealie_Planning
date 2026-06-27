@@ -172,10 +172,23 @@ def cmd_replace_image(args):
     recipes_sorted = sorted(recipes, key=lambda x: x["name"])
 
     if args.search:
-        recipes_sorted = [r for r in recipes_sorted if args.search.lower() in r["name"].lower()]
+        recipes_sorted = [r for r in recipes_sorted if args.search.lower() in r["name"].lower() or args.search.lower() in r["slug"].lower()]
         if not recipes_sorted:
             print(f"No recipes found matching '{args.search}'.")
             return
+
+    image_url = getattr(args, "url", None)
+
+    # When a specific URL is given and search narrows to one recipe, skip prompt
+    if image_url and len(recipes_sorted) == 1:
+        r = recipes_sorted[0]
+        print(f"Uploading image for '{r['name']}' from URL...")
+        try:
+            success = client.add_cover_image(r["slug"], r["name"], ingredients=r.get("recipeIngredient"), image_url=image_url)
+            print(f"  ✓ Image replaced." if success else f"  ✗ Download failed or URL did not return a valid image.")
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+        return
 
     print(f"\nFound {len(recipes_sorted)} recipes. Select which to replace images for.\n")
     print("Press y to replace image, n to skip, q to quit.\n")
@@ -186,9 +199,9 @@ def cmd_replace_image(args):
         if answer == "q":
             break
         if answer == "y":
-            print(f"    Searching for image...")
+            print(f"    {'Downloading from URL' if image_url else 'Searching for image'}...")
             try:
-                success = client.add_cover_image(r["slug"], r["name"], ingredients=r.get("recipeIngredient"))
+                success = client.add_cover_image(r["slug"], r["name"], ingredients=r.get("recipeIngredient"), image_url=image_url)
                 if success:
                     print(f"    ✓ Image replaced.")
                     replaced += 1
@@ -254,7 +267,8 @@ def main():
 
     # replace-image
     ri = sub.add_parser("replace-image", help="Interactively replace recipe cover images")
-    ri.add_argument("--search", help="Filter recipe list by name")
+    ri.add_argument("--search", help="Filter recipe list by name or slug")
+    ri.add_argument("--url", help="Image URL to download and use (skips DuckDuckGo search)")
     ri.set_defaults(func=cmd_replace_image)
 
     args = parser.parse_args()

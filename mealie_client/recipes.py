@@ -109,9 +109,33 @@ class RecipesMixin:
                 return t
         return self.post("/api/organizers/tags", json={"name": name})
 
+    def _upload_image_bytes(self, slug: str, content: bytes, content_type: str) -> bool:
+        ext = "png" if "png" in content_type else "jpg"
+        self.put_multipart(
+            f"/api/recipes/{slug}/image",
+            files={
+                "image": (f"cover.{ext}", content, content_type),
+                "extension": (None, ext),
+            },
+        )
+        return True
+
     def add_cover_image(self: "MealieClient", slug: str, recipe_name: str,
-                        cuisine: str = "", ingredients: list[str] | None = None) -> bool:
-        """Search DuckDuckGo for a food photo and upload it as the recipe cover."""
+                        cuisine: str = "", ingredients: list[str] | None = None,
+                        image_url: str | None = None) -> bool:
+        """Upload a cover image from a specific URL, or search DuckDuckGo if none given."""
+        if image_url:
+            try:
+                img = requests.get(image_url, allow_redirects=True, timeout=15,
+                                   headers={"User-Agent": "Mozilla/5.0"})
+                img.raise_for_status()
+                content_type = img.headers.get("content-type", "image/jpeg")
+                if not content_type.startswith("image/"):
+                    return False
+                return self._upload_image_bytes(slug, img.content, content_type)
+            except Exception:
+                return False
+
         from ddgs import DDGS
         ingredient_hint = ""
         if ingredients:
@@ -131,11 +155,11 @@ class RecipesMixin:
             return False
 
         for result in results:
-            image_url = result.get("image", "")
-            if not image_url.startswith("http"):
+            url = result.get("image", "")
+            if not url.startswith("http"):
                 continue
             try:
-                img = requests.get(image_url, allow_redirects=True, timeout=15,
+                img = requests.get(url, allow_redirects=True, timeout=15,
                                    headers={"User-Agent": "Mozilla/5.0"})
                 img.raise_for_status()
                 content_type = img.headers.get("content-type", "")
@@ -143,15 +167,7 @@ class RecipesMixin:
                     continue
                 if len(img.content) < 20_000:  # skip tiny/placeholder images
                     continue
-                ext = "png" if "png" in content_type else "jpg"
-                self.put_multipart(
-                    f"/api/recipes/{slug}/image",
-                    files={
-                        "image": (f"cover.{ext}", img.content, content_type),
-                        "extension": (None, ext),
-                    },
-                )
-                return True
+                return self._upload_image_bytes(slug, img.content, content_type)
             except Exception:
                 continue
         return False
