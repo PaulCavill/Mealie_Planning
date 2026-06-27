@@ -160,12 +160,19 @@ Interactively replace recipe cover images by searching DuckDuckGo for better-mat
 # Replace images for all recipes (interactive)
 .venv/bin/python main.py replace-image
 
-# Filter by recipe name
+# Filter by recipe name or slug
 .venv/bin/python main.py replace-image --search pork
+
+# Use a specific image URL instead of searching (no prompt when one recipe matches)
+.venv/bin/python main.py replace-image --search pork-mince-pasta --url https://example.com/image.jpg
 
 # Batch mode with automation
 echo "y" | .venv/bin/python main.py replace-image --search pasta
 ```
+
+**Options:**
+- `--search` — Filter by recipe name or slug
+- `--url` — Download and use a specific image URL instead of searching DuckDuckGo. When combined with `--search` that matches exactly one recipe, uploads immediately with no interactive prompt.
 
 **Behavior:**
 - Searches DuckDuckGo for images matching the recipe name and key ingredients
