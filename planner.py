@@ -25,6 +25,24 @@ DAY_EFFORT_MAX = {
 
 EFFORT_NAMES = {f"effort-{i}" for i in range(1, 6)}
 
+_PANTRY_STAPLES = {
+    "salt", "sea salt", "kosher salt", "table salt", "fine salt", "flaky salt",
+    "pepper", "black pepper", "white pepper", "ground pepper", "ground black pepper",
+}
+
+
+def _remove_pantry_staples(client: MealieClient, list_id: str) -> None:
+    items = client.get_list_items(list_id)
+    removed = 0
+    for item in items:
+        food = item.get("food") or {}
+        label = (food.get("name") or item.get("note") or "").strip().lower()
+        if label in _PANTRY_STAPLES:
+            client.delete_list_item(item["id"])
+            removed += 1
+    if removed:
+        print(f"    Removed {removed} pantry staple(s) (salt/pepper) from shopping list.")
+
 
 def _get_effort(recipe: dict) -> int | None:
     for tag in (recipe.get("tags") or []):
@@ -168,6 +186,9 @@ def plan_week(
             if recipe_id:
                 scale = e.get("scale_factor", 1.0)
                 client.add_recipe_to_list(list_id, recipe_id, scale=scale)
+
+        _remove_pantry_staples(client, list_id)
+
         result["shopping_list_id"] = list_id
         result["shopping_list_name"] = name
 

@@ -39,6 +39,9 @@ class ShoppingMixin:
             json={"shoppingListId": list_id, "note": note, "quantity": quantity, "checked": False},
         )
 
+    def delete_list_item(self: "MealieClient", item_id: str) -> None:
+        self.delete(f"/api/households/shopping/items/{item_id}")
+
     def delete_shopping_list(self: "MealieClient", list_id: str) -> None:
         self.delete(f"/api/households/shopping/lists/{list_id}")
 
