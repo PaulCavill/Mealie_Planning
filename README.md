@@ -101,6 +101,7 @@ Picks dinner recipes from your library and creates entries in Mealie for the nex
 - Skips dates that already have planned dinners (prevents duplicates when run multiple times)
 - Excludes recipes used in the last 40 days (ensures variety across planning cycles)
 - With `--shopping-list`: deletes old shopping list for that week and creates a fresh one
+- With `--shopping-list`: automatically removes pantry staples (salt, pepper) from the generated list
 
 ### `replace` — Replace a day's meal
 
@@ -241,6 +242,6 @@ Mealie/
 - **Dinner filtering** — The `dinner` tag filters the recipe library for planning. Non-dinner recipes (oats, sauces, biscuits) won't appear in meal plans.
 - **Recipe rotation** — The planner excludes recipes used in the last 40 days to ensure variety across planning cycles.
 - **Duplicate prevention** — Running `plan` multiple times safely skips dates that already have meals. Use `--override-plan` to replace existing plans. The `suggest` command skips recipes already in your library.
-- **Shopping lists** — Old shopping lists for the same week are deleted and recreated when `--shopping-list` is used, ensuring they match the current meal plan.
+- **Shopping lists** — Old shopping lists for the same week are deleted and recreated when `--shopping-list` is used, ensuring they match the current meal plan. Pantry staples (salt, pepper) are automatically removed from the generated list.
 - **Ingredient parsing** — All recipes have ingredient notes (e.g., `"500g chicken"`) automatically parsed into structured quantity/unit fields. Missing units and foods are created on-the-fly during parsing, preventing 500 errors. The `parse-ingredients` command runs automatically after `suggest` imports recipes and can be run manually on older recipes.
 - **Source URLs** — Claude-generated recipes include real, publicly accessible source URLs (e.g., allrecipes.com, bbc.co.uk/food). These are stored in the recipe data and printed during import.
