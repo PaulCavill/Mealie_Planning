@@ -8,7 +8,7 @@ An AI-powered meal planning tool for [Mealie](https://mealie.io). Uses Claude to
 - **Cover images** — DuckDuckGo image search finds a relevant photo for each recipe automatically. Refresh unrelated images anytime with `replace-image`.
 - **Effort rating** — Recipes are tagged `effort-1` (quick) through `effort-5` (time-intensive). Claude rates new recipes on import; existing ones can be rated interactively or auto-rated in bulk.
 - **Smart planning** — Fortnightly dinner plans with per-day effort rules: easy meals on Monday/Wednesday, anything goes on Saturday/Sunday/Tuesday.
-- **Day replacement** — Replace any planned meal interactively, with duplicate checking against the next 6 weeks of plans.
+- **Day replacement** — Replace any planned meal interactively; recipes already booked in the next 6 weeks are filtered out of the choices.
 - **Ingredient parsing** — Recipe notes are parsed into structured quantity/unit/food fields via Mealie's NLP parser, creating missing units and foods on demand.
 
 ## Household rules
@@ -115,7 +115,7 @@ Picks dinner recipes from your library and creates entries in Mealie for two wee
 
 ### `replace` — Replace a day's meal
 
-Interactively swap out a planned dinner. Shows what's currently planned, lists available recipes (marking those already in the next 6 weeks of plans and refusing to pick them), and commits the change.
+Interactively swap out a planned dinner. Shows what's currently planned, lists the recipes still free (anything already booked in the next 6 weeks of plans is hidden, with a count), and commits the change.
 
 ```bash
 .venv/bin/python main.py replace 2026-05-30
@@ -129,11 +129,19 @@ Interactively swap out a planned dinner. Shows what's currently planned, lists a
 
 `--effort` excludes unrated recipes — run `tag-effort` first if the list comes back empty.
 
-### `week` — Show this week's plan
+### `week` — Show the plan
+
+With no argument, shows the current Monday–Sunday week. Pass a number of days to show a rolling window starting today instead — handy for checking the fortnight `plan` just created.
 
 ```bash
+# This week (Mon-Sun)
 .venv/bin/python main.py week
+
+# The next 3 weeks, starting today
+.venv/bin/python main.py week 21
 ```
+
+Entries are listed by date with the weekday and entry type, and separated by a blank line at each week boundary.
 
 ### `recipes` — List all recipes
 
