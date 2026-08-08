@@ -28,6 +28,8 @@ EFFORT_NAMES = {f"effort-{i}" for i in range(1, 6)}
 _PANTRY_STAPLES = {
     "salt", "sea salt", "kosher salt", "table salt", "fine salt", "flaky salt",
     "pepper", "black pepper", "white pepper", "ground pepper", "ground black pepper",
+    "garlic", "lemon", "onion", "olive oil", "vegetable oil", "canola oil", "sunflower oil",
+    "metal skewers", "wooden skewers",
 }
 
 
@@ -254,14 +256,22 @@ def replace_day(client: MealieClient, target_date: date, search: str = None, eff
             print(f"No dinner recipes rated effort {effort} or below. Run 'tag-effort' to rate recipes.")
             return
 
+    # Hide recipes already booked elsewhere in the upcoming plan — they can't be picked anyway
+    hidden = sum(1 for r in recipes if r["id"] in already_planned_ids)
+    recipes = [r for r in recipes if r["id"] not in already_planned_ids]
+    if not recipes:
+        print(f"\nAll {hidden} matching recipe(s) are already in the upcoming plan. "
+              f"Widen the filters or run 'suggest' to add more.")
+        return
+
     recipes = sorted(recipes, key=lambda r: r["name"])
     effort_label = f" (effort ≤ {effort})" if effort is not None else ""
-    print(f"\nAvailable recipes ({len(recipes)}){effort_label}:\n")
+    hidden_label = f", {hidden} already planned and hidden" if hidden else ""
+    print(f"\nAvailable recipes ({len(recipes)}){effort_label}{hidden_label}:\n")
     for i, r in enumerate(recipes, 1):
         e = _get_effort(r)
         effort_str = f"  [effort-{e}]" if e else ""
-        flag = "  [already planned]" if r["id"] in already_planned_ids else ""
-        print(f"  {i:>3}. {r['name']}{effort_str}{flag}")
+        print(f"  {i:>3}. {r['name']}{effort_str}")
 
     print()
     while True:
@@ -273,9 +283,6 @@ def replace_day(client: MealieClient, target_date: date, search: str = None, eff
             idx = int(choice) - 1
             if 0 <= idx < len(recipes):
                 chosen = recipes[idx]
-                if chosen["id"] in already_planned_ids:
-                    print(f"  '{chosen['name']}' is already in the upcoming plan — pick a different recipe.")
-                    continue
                 break
         except ValueError:
             pass

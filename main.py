@@ -6,7 +6,7 @@ Commands:
   suggest             Ask Claude AI to suggest meals and import them into Mealie
   plan                Generate fortnightly meal plans (every 2nd week, starting this Saturday)
   recipes             List all recipes in your Mealie library
-  week                Show this week's current meal plan
+  week                Show this week's current meal plan (or the next N days)
   tag-dinners         Interactively mark recipes as dinner
   tag-effort          Rate recipes by effort level (1-5)
   replace             Replace a day's meal in the plan
@@ -54,14 +54,34 @@ def cmd_recipes(args):
 def cmd_week(args):
     from mealie_client import MealieClient
     client = MealieClient()
-    entries = client.get_this_week()
+
+    days = args.days
+    if days is not None:
+        if days < 1:
+            print("days must be 1 or more.")
+            sys.exit(1)
+        entries = client.get_upcoming(days)
+        heading = f"Meal plan for the next {days} days"
+        empty_msg = f"No meal plan entries in the next {days} days."
+    else:
+        entries = client.get_this_week()
+        heading = "This week's meal plan"
+        empty_msg = "No meal plan entries for this week."
+
     if not entries:
-        print("No meal plan entries for this week.")
+        print(empty_msg)
         return
-    print(f"\nThis week's meal plan ({len(entries)} entries):\n")
+
+    print(f"\n{heading} ({len(entries)} entries):\n")
+    last_week = None
     for e in sorted(entries, key=lambda x: x.get("date", "")):
+        entry_date = date.fromisoformat(e["date"])
+        week = entry_date.isocalendar()[:2]
+        if last_week is not None and week != last_week:
+            print()
+        last_week = week
         recipe_name = e.get("recipe", {}).get("name") if e.get("recipe") else e.get("title", "(no recipe)")
-        print(f"  {e['date']}  [{e.get('entryType', '?'):9}]  {recipe_name}")
+        print(f"  {e['date']}  {entry_date.strftime('%a')}  [{e.get('entryType', '?'):9}]  {recipe_name}")
     print()
 
 
@@ -236,7 +256,9 @@ def main():
     r.set_defaults(func=cmd_recipes)
 
     # week
-    w = sub.add_parser("week", help="Show this week's meal plan")
+    w = sub.add_parser("week", help="Show this week's meal plan, or the next N days")
+    w.add_argument("days", nargs="?", type=int, metavar="DAYS",
+                   help="Show the next N days starting today (e.g. 21 for 3 weeks)")
     w.set_defaults(func=cmd_week)
 
     # tag-dinners

@@ -27,6 +27,11 @@ class MealPlansMixin:
         sunday = monday + timedelta(days=6)
         return self.list_meal_plans(monday, sunday)
 
+    def get_upcoming(self: "MealieClient", days: int) -> list[dict]:
+        """Entries from today through the next `days` days (today counts as day 1)."""
+        today = date.today()
+        return self.list_meal_plans(today, today + timedelta(days=days - 1))
+
     def add_meal_plan_entry(
         self: "MealieClient",
         plan_date: date,
