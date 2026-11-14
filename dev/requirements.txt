@@ -1,0 +1,5 @@
+# Dev-only dependencies for dev/fake_mealie.py (not needed by the tool itself)
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9   # form login + multipart image upload
+# dev/smoke_test.py additionally needs: requests (already a project dependency) and pillow

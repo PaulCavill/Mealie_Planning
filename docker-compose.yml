@@ -1,0 +1,18 @@
+services:
+  mealie-planner:
+    # Pull the published image, or swap this line for `build: .` to build locally.
+    image: ghcr.io/paulcavill/mealie_planning:latest
+    container_name: mealie-planner
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      MEALIE_BASE_URL: ${MEALIE_BASE_URL}        # e.g. http://mealie:9000
+      MEALIE_TOKEN: ${MEALIE_TOKEN}              # Mealie > Profile > API Tokens
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}  # only needed for recipe generation
+      APP_PASSWORD: ${APP_PASSWORD:-}            # optional: set to require a login
+      TZ: ${TZ:-Pacific/Auckland}
+    volumes:
+      # Settings and job history. On TrueNAS, point this at a dataset,
+      # e.g. /mnt/tank/apps/mealie-planner:/data
+      - ./data:/data
