@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "_macros.html" import effort_badge, thumb %}
+{% block title %}Plan saved{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="crumb"><a href="/">Plan</a> /</p>
+    <h1>Plan saved</h1>
+  </div>
+</div>
+
+<div class="alert alert-ok" role="status">
+  <strong>{{ result.created }} dinner{{ "" if result.created == 1 else "s" }} added to Mealie.</strong>
+  {% if result.deleted %}{{ result.deleted | length }} existing dinner{{ "" if result.deleted | length == 1 else "s" }} replaced.{% endif %}
+</div>
+
+{% if result.warnings %}
+<div class="alert alert-warn" role="status">
+  <strong>Worth knowing</strong>
+  <ul class="plain">{% for w in result.warnings %}<li>{{ w.message }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="preview-weeks">
+  {% for week in result.weeks %}
+  <section class="card week-card">
+    <h2>Week of {{ week.week_start | day_short }}</h2>
+    <ul class="rows">
+      {% for d in week.entries %}
+      <li class="row">
+        {{ thumb(d.recipe_id) }}
+        <div class="row-main">
+          <div class="row-kicker">{{ d.date | day_long }}</div>
+          <div class="row-title">{{ d.recipe_name }}</div>
+          <div class="row-meta">
+            {% if d.type == "recipe" %}<span class="badge new">Added</span>{% else %}<span class="badge kept">Already planned</span>{% endif %}
+            {{ effort_badge(d.effort) }}
+          </div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% if week.shopping_list_name %}
+    <p class="week-foot">Shopping list <strong>“{{ week.shopping_list_name }}”</strong> created in Mealie{% if week.staples_removed %} · {{ week.staples_removed }} pantry staple{{ "" if week.staples_removed == 1 else "s" }} left out{% endif %}.</p>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+
+<div class="actions">
+  <a class="btn btn-primary" href="/?start={{ result.weeks[0].week_start if result.weeks else '' }}">Back to the plan</a>
+</div>
+{% endblock %}

@@ -14,7 +14,8 @@ from urllib.parse import quote
 
 import requests
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -176,6 +177,11 @@ async def http_error(request: Request, exc: StarletteHTTPException):
     if exc.status_code == 404:
         return _problem(request, "That page doesn't exist (any more).", 404, title="Not found")
     return _problem(request, str(exc.detail), exc.status_code)
+
+
+@app.exception_handler(RequestValidationError)
+async def bad_form(request: Request, exc: RequestValidationError):
+    return _problem(request, "That request was missing something it needs. Go back, reload the page and try again.", 400)
 
 
 @app.exception_handler(Exception)

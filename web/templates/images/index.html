@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block title %}Images{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Recipe images</h1>
+    <p class="muted">Pick a recipe to find a better cover photo for it.</p>
+  </div>
+</div>
+
+<form class="toolbar" method="get" action="/images" role="search"
+      hx-get="/images" hx-target="#image-results" hx-swap="outerHTML" hx-push-url="true"
+      hx-trigger="input delay:300ms from:find input[type=search], change, submit">
+  <label class="searchbox">
+    {{ icon("search") }}
+    <input type="search" name="q" value="{{ q }}" placeholder="Search recipes…" aria-label="Search recipes" autocomplete="off">
+  </label>
+  <div class="chips">
+    <label class="chip">
+      <input type="checkbox" name="missing" value="1"{% if missing %} checked{% endif %}>
+      <span>Without an image ({{ missing_count }})</span>
+    </label>
+  </div>
+</form>
+
+{% include "images/_results.html" %}
+{% endblock %}

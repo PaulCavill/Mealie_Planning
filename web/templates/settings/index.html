@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% macro problems_for(name) %}{% for p in field_problems.get(name, []) %}<span class="field-error">{{ p }}</span>{% endfor %}{% endmacro %}
+{% macro number(name, label, hint=None, step="1", min="0", max=None) %}
+<label class="field field-short{% if field_problems.get(name) %} has-error{% endif %}">
+  <span class="label">{{ label }}</span>
+  <input type="number" name="{{ name }}" value="{{ v[name] }}" step="{{ step }}" min="{{ min }}"{% if max %} max="{{ max }}"{% endif %} inputmode="decimal">
+  {% if hint %}<span class="hint">{{ hint }}</span>{% endif %}
+  {{ problems_for(name) }}
+</label>
+{% endmacro %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="muted">How the planner plans, and what it tells Claude about your household.</p>
+  </div>
+</div>
+
+{% if saved %}<div class="alert alert-ok" role="status"><strong>Settings saved.</strong></div>{% endif %}
+{% if problems %}
+<div class="alert alert-error" role="alert" id="problems">
+  <strong>Nothing was saved — please fix {{ "this" if problems | length == 1 else "these" }}:</strong>
+  <ul class="plain">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<section class="card" aria-labelledby="conn-h">
+  <h2 id="conn-h">Connection</h2>
+  <dl class="status-list">
+    <div>
+      <dt>Mealie</dt>
+      <dd>
+        <span class="dot {{ 'dot-ok' if status.mealie_ok else 'dot-bad' }}"></span>
+        <span>{{ status.mealie_message }}</span>
+        {% if status.mealie_url %}<div class="muted small url">{{ status.mealie_url }}</div>{% endif %}
+        {% if status.missing %}<div class="muted small">Missing: {{ status.missing | join(", ") }}</div>{% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>Claude API key</dt>
+      <dd><span class="dot {{ 'dot-ok' if status.anthropic else 'dot-off' }}"></span>
+        <span>{{ "Set" if status.anthropic else "Not set — recipe generation is off" }}</span></dd>
+    </div>
+    <div>
+      <dt>Login</dt>
+      <dd><span class="dot {{ 'dot-ok' if status.login else 'dot-off' }}"></span>
+        <span>{{ "Password required" if status.login else "Off — anyone on your network can open this app" }}</span></dd>
+    </div>
+    <div>
+      <dt>Data folder</dt>
+      <dd><span class="url">{{ status.data_dir }}</span></dd>
+    </div>
+  </dl>
+  <p class="muted small">These come from the container's environment variables (MEALIE_BASE_URL, MEALIE_TOKEN, ANTHROPIC_API_KEY, APP_PASSWORD, DATA_DIR). Secret values are never shown here.</p>
+</section>
+
+<form method="post" action="/settings" class="settings-form" data-busy>
+  <section class="card" aria-labelledby="house-h">
+    <h2 id="house-h">Household</h2>
+    <div class="field-row">
+      {{ number("adults", "Adults") }}
+      {{ number("children", "Children") }}
+      {{ number("child_weight", "Child portion", "Share of an adult serving, 0 to 1", step="0.05", max="1") }}
+      {{ number("default_servings", "Default servings", "Used when a recipe doesn't say", min="1") }}
+    </div>
+    <label class="field{% if field_problems.household_description %} has-error{% endif %}">
+      <span class="label">Household description</span>
+      <input type="text" name="household_description" value="{{ v.household_description }}">
+      <span class="hint">Given to Claude so recipes suit you, e.g. “2 adults and 2 young children, based in New Zealand”.</span>
+      {{ problems_for("household_description") }}
+    </label>
+  </section>
+
+  <section class="card" aria-labelledby="plan-h">
+    <h2 id="plan-h">Planning</h2>
+    <fieldset class="field{% if field_problems.plan_weekdays %} has-error{% endif %}">
+      <legend class="label">Plan dinners on</legend>
+      <div class="chips wrap">
+        {% for name in weekday_names %}
+        <label class="chip">
+          <input type="checkbox" name="plan_weekdays" value="{{ loop.index0 }}"{% if loop.index0 | string in v.plan_weekdays %} checked{% endif %}>
+          <span>{{ name[:3] }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      {{ problems_for("plan_weekdays") }}
+    </fieldset>
+    <div class="field-row">
+      <label class="field field-short{% if field_problems.week_start_day %} has-error{% endif %}">
+        <span class="label">Week starts on</span>
+        <select name="week_start_day">
+          {% for name in weekday_names %}<option value="{{ loop.index0 }}"{% if v.week_start_day | string == loop.index0 | string %} selected{% endif %}>{{ name }}</option>{% endfor %}
+        </select>
+        {{ problems_for("week_start_day") }}
+      </label>
+      {{ number("weeks_to_plan", "Weeks per plan", "How many weeks one run fills", min="1", max="12") }}
+      {{ number("week_interval", "Plan every Nth week", "1 = every week, 2 = every other", min="1", max="52") }}
+    </div>
+
+    <fieldset class="field{% if field_problems.day_effort_max %} has-error{% endif %}">
+      <legend class="label">Effort limit per weekday</legend>
+      <span class="hint">Keep busy nights easy: the planner only picks recipes at or below the limit (unrated recipes are allowed).</span>
+      <div class="cap-grid">
+        {% for name in weekday_names %}
+        {% set key = loop.index0 | string %}
+        <label class="cap-row">
+          <span>{{ name }}</span>
+          <select name="effort_max_{{ loop.index0 }}" aria-label="Effort limit on {{ name }}">
+            <option value="">No limit</option>
+            {% for n in range(1, 6) %}<option value="{{ n }}"{% if v.effort_max.get(key) == n | string %} selected{% endif %}>≤ {{ n }} · {{ effort_labels[n] }}</option>{% endfor %}
+          </select>
+        </label>
+        {% endfor %}
+      </div>
+      {{ problems_for("day_effort_max") }}
+    </fieldset>
+
+    <div class="field-row">
+      {{ number("lookback_days", "Don't repeat within (days)", "A dinner eaten this recently isn't picked again", max="365") }}
+      {{ number("replace_lookahead_weeks", "Swap looks ahead (weeks)", "Swap hides recipes already planned this far ahead", min="1", max="52") }}
+    </div>
+
+    <label class="field{% if field_problems.pantry_staples %} has-error{% endif %}">
+      <span class="label">Pantry staples</span>
+      <textarea name="pantry_staples" rows="8" spellcheck="false">{{ v.pantry_staples }}</textarea>
+      <span class="hint">One per line. These are left off generated shopping lists.</span>
+      {{ problems_for("pantry_staples") }}
+    </label>
+  </section>
+
+  <section class="card" aria-labelledby="ai-h">
+    <h2 id="ai-h">Recipe generation</h2>
+    <div class="field-row">
+      <label class="field{% if field_problems.claude_model %} has-error{% endif %}">
+        <span class="label">Claude model</span>
+        <input type="text" name="claude_model" value="{{ v.claude_model }}" spellcheck="false" autocapitalize="off">
+        {{ problems_for("claude_model") }}
+      </label>
+      {{ number("suggest_count", "Recipes per batch", "Default on the Generate page", min="1", max="50") }}
+      {{ number("batch_size", "Recipes per request", "Smaller is more reliable", min="1", max="10") }}
+    </div>
+    <label class="field{% if field_problems.system_prompt %} has-error{% endif %}">
+      <span class="label">Instructions for Claude (system prompt)</span>
+      <textarea name="system_prompt" id="system_prompt" rows="16" class="mono" spellcheck="false">{{ v.system_prompt }}</textarea>
+      <span class="hint">Placeholders: <code>{household}</code>, <code>{servings}</code> and <code>{existing}</code>. Write literal braces doubled: <code>{{ "{{" }}</code> and <code>{{ "}}" }}</code>.</span>
+      {{ problems_for("system_prompt") }}
+    </label>
+    <div class="actions">
+      <button type="button" class="btn btn-small" id="reset-prompt">Reset to default</button>
+      <span class="muted small" id="reset-note">{% if prompt_is_default %}This is the default prompt.{% else %}Customised. Resetting only fills the box — press Save to keep it.{% endif %}</span>
+    </div>
+    <textarea id="default-prompt" hidden readonly>{{ default_prompt }}</textarea>
+  </section>
+
+  <div class="savebar">
+    <div class="savebar-main">
+      <span class="muted">Changes apply to the next plan or batch.</span>
+      <button type="submit" class="btn btn-primary">Save settings</button>
+    </div>
+  </div>
+</form>
+{% endblock %}

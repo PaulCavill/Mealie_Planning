@@ -1,0 +1,31 @@
+{% from "_macros.html" import status_pill %}
+<div id="job" class="job"{% if job.active %} hx-get="/jobs/{{ job.id }}/fragment" hx-trigger="load delay:1s" hx-swap="outerHTML"{% endif %}>
+  <section class="card">
+    <div class="job-head">
+      {{ status_pill(job.status) }}
+      <span class="muted">{{ kind_labels.get(job.kind, job.kind) }} · started {{ (job.started_at or job.created_at) | clock }}{% if job.duration is not none %} · {{ "running for" if job.active else "took" }} {{ job.duration | elapsed }}{% endif %}</span>
+    </div>
+    {% if job.active %}
+    <div class="progress{% if percent is none %} is-indeterminate{% endif %}" role="progressbar" aria-label="Progress"{% if percent is not none %} aria-valuenow="{{ percent }}" aria-valuemin="0" aria-valuemax="100"{% endif %}>
+      <div class="progress-bar" style="width: {{ percent if percent is not none else 30 }}%"></div>
+    </div>
+    <p class="muted small">{% if job.progress_total %}{{ job.progress_done or 0 }} of {{ job.progress_total }} · {% endif %}You can leave this page; the job keeps running and appears under Maintenance.</p>
+    {% endif %}
+    {% if job.status == "failed" %}
+    <div class="alert alert-error" role="alert"><strong>This job did not finish.</strong> {{ job.error or "No reason was recorded." }}</div>
+    {% endif %}
+    <details class="log-box"{% if job.active or job.status == "failed" %} open{% endif %}>
+      <summary>Log · {{ job.log | length }} line{{ "" if job.log | length == 1 else "s" }}</summary>
+      <div class="log"><pre>{% for line in job.log %}{{ line }}
+{% else %}Nothing logged yet.{% endfor %}</pre></div>
+    </details>
+  </section>
+
+  {% if job.status == "done" and job.result is not none %}
+    {% if job.kind == "generate" %}{% include "jobs/_result_generate.html" %}
+    {% elif job.kind == "import" %}{% include "jobs/_result_import.html" %}
+    {% elif job.kind == "scrape" %}{% include "jobs/_result_scrape.html" %}
+    {% elif job.kind == "parse" %}{% include "jobs/_result_parse.html" %}
+    {% endif %}
+  {% endif %}
+</div>

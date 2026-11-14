@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block title %}Recipes{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Recipes</h1>
+    <p class="muted">Mark which recipes are dinners and how much effort they take. Changes save straight away.</p>
+  </div>
+</div>
+
+<form class="toolbar" method="get" action="/recipes" role="search"
+      hx-get="/recipes" hx-target="#recipe-results" hx-swap="outerHTML" hx-push-url="true"
+      hx-trigger="input delay:300ms from:find input[type=search], change, submit">
+  <label class="searchbox">
+    {{ icon("search") }}
+    <input type="search" name="q" value="{{ q }}" placeholder="Search recipes…" aria-label="Search recipes" autocomplete="off">
+  </label>
+  <div class="chips" role="radiogroup" aria-label="Show">
+    {% for key, label in filters %}
+    <label class="chip">
+      <input type="radio" name="filter" value="{{ key }}"{% if filter == key %} checked{% endif %}>
+      <span>{{ label }}</span>
+    </label>
+    {% endfor %}
+  </div>
+</form>
+
+<details class="legend">
+  <summary>What do the effort numbers mean?</summary>
+  <ul class="legend-list">
+    {% for n, label in effort_labels.items() %}<li><span class="badge effort e{{ n }}">{{ n }}</span> {{ label }}</li>{% endfor %}
+  </ul>
+  <p class="muted">Tap a number to rate a recipe; tap it again to clear the rating. The planner keeps high-effort dinners off the days you've limited in Settings.</p>
+</details>
+
+{% include "recipes/_results.html" %}
+{% endblock %}

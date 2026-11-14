@@ -1,0 +1,22 @@
+<div id="recipe-results">
+  <p class="result-count muted" aria-live="polite">
+    {% if total %}{{ total }} recipe{{ "" if total == 1 else "s" }}{% if q %} matching “{{ q }}”{% endif %}{% endif %}
+  </p>
+  {% if not library_size %}
+  <div class="empty">
+    <h2>No recipes in Mealie yet</h2>
+    <p>Add some in Mealie, or let Claude suggest a batch.</p>
+    <a class="btn btn-primary" href="/generate">Generate recipes</a>
+  </div>
+  {% elif not total %}
+  <div class="empty">
+    <h2>No recipes found</h2>
+    <p>{% if q %}Nothing matches “{{ q }}”{% if filter != "all" %} with this filter{% endif %}.{% else %}No recipes fit this filter.{% endif %}</p>
+    <a class="btn" href="/recipes">Show all recipes</a>
+  </div>
+  {% else %}
+  <ul class="recipe-list" id="recipe-list">
+    {% include "recipes/_rows.html" %}
+  </ul>
+  {% endif %}
+</div>

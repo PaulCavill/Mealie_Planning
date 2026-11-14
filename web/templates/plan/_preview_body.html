@@ -1,0 +1,59 @@
+{% from "_macros.html" import icon, effort_badge, thumb %}
+<div id="preview-body">
+  <p class="summary-line">
+    <span class="badge new">{{ proposed }} new</span>
+    {% if kept %}<span class="badge kept">{{ kept }} kept</span>{% endif %}
+    {% if preview.deletions %}<span class="badge del">{{ preview.deletions | length }} to be replaced</span>{% endif %}
+  </p>
+
+  {% if general_warnings %}
+  <div class="alert alert-warn" role="status">
+    {% for message in general_warnings %}<div>{{ message }}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if preview.deletions %}
+  <div class="alert alert-error" role="status">
+    <strong>Saving will remove {{ preview.deletions | length }} dinner{{ "" if preview.deletions | length == 1 else "s" }} already in Mealie:</strong>
+    <ul class="plain">
+      {% for entry in preview.deletions %}
+      <li>{{ entry.date | day_short }} — {{ entry.recipe_name }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="preview-weeks">
+    {% for week in preview.weeks %}
+    <section class="card week-card">
+      <h2>Week of {{ week.week_start | day_short }}</h2>
+      <ul class="rows">
+        {% for d in week.days %}
+        <li class="row{% if d.type != 'recipe' %} row-kept{% endif %}{% if changed == d.date %} flash{% endif %}">
+          {{ thumb(d.recipe_id) }}
+          <div class="row-main">
+            <div class="row-kicker">{{ d.date | day_long }}</div>
+            <div class="row-title">{{ d.recipe_name }}</div>
+            <div class="row-meta">
+              {% if d.type == "recipe" %}<span class="badge new">New</span>{% else %}<span class="badge kept">Already planned · kept</span>{% endif %}
+              {{ effort_badge(d.effort, unrated=d.type == "recipe") }}
+              {% if d.max_effort %}<span class="badge muted-badge" title="Settings limit this weekday to effort {{ d.max_effort }} or less">Limit ≤ {{ d.max_effort }}</span>{% endif %}
+              {% if d.scale_factor %}<span class="meta-text" title="Shopping quantities are multiplied by this for your household">×{{ d.scale_factor }}</span>{% endif %}
+            </div>
+            {% for message in day_warnings.get(d.date, []) %}
+            <div class="row-warning">{{ message | capitalize }}</div>
+            {% endfor %}
+          </div>
+          {% if d.type == "recipe" %}
+          <div class="row-actions">
+            <button type="button" class="btn btn-small" hx-post="/plan/preview/{{ pid }}/reroll" hx-vals='{{ {"date": d.date} | tojson }}' hx-target="#preview-body" hx-swap="outerHTML" aria-label="Re-roll {{ d.date | day_long }}">{{ icon("dice") }}<span>Re-roll</span></button>
+            <button type="button" class="btn btn-small" hx-get="/plan/preview/{{ pid }}/choose" hx-vals='{{ {"date": d.date} | tojson }}' hx-target="#modal-body" aria-label="Choose a recipe for {{ d.date | day_long }}">{{ icon("search") }}<span>Choose…</span></button>
+          </div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endfor %}
+  </div>
+</div>

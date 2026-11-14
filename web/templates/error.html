@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="card narrow center-card">
+  <h1>{{ title }}</h1>
+  <p class="lead">{{ message }}</p>
+  <div class="actions center">
+    <a class="btn btn-primary" href="/">Back to the plan</a>
+    <a class="btn" href="/settings">Check the connection</a>
+  </div>
+</section>
+{% endblock %}

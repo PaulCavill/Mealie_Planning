@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_pill %}
+{% block title %}Generate{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Generate recipes</h1>
+    <p class="muted">Ask Claude for new dinner ideas, review them, and import the ones you like into Mealie.</p>
+  </div>
+</div>
+
+<div class="two-col">
+  <section class="card" aria-labelledby="gen-h">
+    <h2 id="gen-h">New dinner ideas</h2>
+    {% if not anthropic_ready %}
+    <div class="alert alert-warn" role="status">
+      <strong>Recipe generation is switched off.</strong>
+      Set <code>ANTHROPIC_API_KEY</code> for this app and restart it to generate recipes with Claude.
+      Importing from a web address still works.
+    </div>
+    {% endif %}
+    {% if errors.generate %}<div class="alert alert-error" role="alert">{{ errors.generate }}</div>{% endif %}
+    <form method="post" action="/generate" class="stack" data-busy>
+      <label class="field field-short">
+        <span class="label">How many recipes</span>
+        <input type="number" name="count" min="1" max="50" value="{{ form.count }}" inputmode="numeric" required{% if not anthropic_ready %} disabled{% endif %}>
+      </label>
+      <label class="field">
+        <span class="label">Restrictions <span class="optional">optional</span></span>
+        <input type="text" name="restrictions" value="{{ form.restrictions }}" maxlength="500" placeholder="e.g. no chicken, at least two vegetarian"{% if not anthropic_ready %} disabled{% endif %}>
+        <span class="hint">Added to the request as an extra rule. The household and style rules come from Settings.</span>
+      </label>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary"{% if not anthropic_ready %} disabled{% endif %}>Generate</button>
+        <span class="muted small">Model: {{ model }}. Nothing is imported until you review.</span>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="url-h">
+    <h2 id="url-h">Import from a web address</h2>
+    <p class="muted">Mealie reads the recipe from the page. One address per line.</p>
+    {% if errors.scrape %}<div class="alert alert-error" role="alert">{{ errors.scrape }}</div>{% endif %}
+    <form method="post" action="/generate/scrape" class="stack" data-busy>
+      <label class="field">
+        <span class="label">Recipe address(es)</span>
+        <textarea name="urls" rows="4" placeholder="https://www.recipetineats.com/…" required spellcheck="false">{{ form.urls }}</textarea>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="dry_run" value="1"{% if form.dry_run %} checked{% endif %}>
+        <span><strong>Preview only</strong><small>Check what Mealie can read without importing</small></span>
+      </label>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Import</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<section class="card" aria-labelledby="recent-h">
+  <h2 id="recent-h">Recent batches</h2>
+  {% if recent %}
+  <ul class="rows compact">
+    {% for job in recent %}
+    <li class="row">
+      <div class="row-main">
+        <div class="row-title">{{ job.title }}</div>
+        <div class="row-meta"><span class="meta-text">{{ job.created_at | clock }}</span> {{ status_pill(job.status) }}</div>
+      </div>
+      <div class="row-actions"><a class="btn btn-small" href="/jobs/{{ job.id }}">{{ "Review" if job.status == "done" else "View" }}</a></div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty small"><p>Batches you generate will be listed here, so you can come back and review them.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

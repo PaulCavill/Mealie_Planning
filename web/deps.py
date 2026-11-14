@@ -145,8 +145,6 @@ def _context(request: Request) -> dict:
         "auth_enabled": auth_enabled(),
         "config_missing": missing_config(),
         "static_v": STATIC_VERSION,
-        "weekday_names": WEEKDAY_NAMES,
-        "effort_labels": EFFORT_LABELS,
     }
 
 
@@ -215,11 +213,15 @@ def thumb_url(recipe_id, version=None, size: str = "min") -> str:
 
 templates.env.filters.update(day_short=_day_short, day_long=_day_long, clock=_clock,
                              elapsed=_elapsed, cook_time=_cook_time)
-templates.env.globals.update(thumb_url=thumb_url)
+# Globals (unlike context values) are also visible inside imported macros.
+templates.env.globals.update(thumb_url=thumb_url, effort_labels=EFFORT_LABELS, weekday_names=WEEKDAY_NAMES)
 
 
 def is_htmx(request: Request) -> bool:
-    return request.headers.get("hx-request") == "true"
+    """True for a fragment request; False when HTMX is restoring a whole page
+    from history (it then needs the full document)."""
+    headers = request.headers
+    return headers.get("hx-request") == "true" and headers.get("hx-history-restore-request") != "true"
 
 
 def render(request: Request, name: str, context: dict | None = None, status_code: int = 200,

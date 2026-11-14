@@ -1,0 +1,19 @@
+<div id="candidates" class="candidates">
+  {% if error %}
+  <div class="alert alert-warn" role="status">{{ error }}</div>
+  {% elif not candidates %}
+  <div class="empty small"><p>No images found for those words. Try different search words.</p></div>
+  {% else %}
+  <p class="muted">Tap a photo to make it this recipe's image.</p>
+  <ul class="candidate-grid">
+    {% for c in candidates %}
+    <li>
+      <button type="button" class="candidate" hx-post="/images/{{ recipe.slug }}/set" hx-vals='{{ {"url": c.url} | tojson }}' hx-target="#current-image" hx-swap="outerHTML" title="{{ c.title }}">
+        <img src="{{ c.thumbnail or c.url }}" alt="{{ c.title }}" loading="lazy" referrerpolicy="no-referrer">
+        {% if c.width and c.height %}<span class="candidate-size">{{ c.width }}×{{ c.height }}</span>{% endif %}
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

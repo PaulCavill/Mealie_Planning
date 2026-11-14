@@ -1,0 +1,22 @@
+{% from "_macros.html" import effort_badge, thumb %}
+{% if empty_message %}
+<div class="empty small"><p>{{ empty_message }}</p></div>
+{% else %}
+{% if note %}<p class="muted picker-note">{{ note }}</p>{% endif %}
+<ul class="picklist">
+  {% for r in recipes %}
+  {% set vals = dict(hidden_fields, recipe_id=r.id) %}
+  <li>
+    <button type="button" class="pick{% if r.current %} is-current{% endif %}" hx-post="{{ pick_url }}" hx-vals='{{ vals | tojson }}' hx-target="{{ pick_target }}" hx-swap="outerHTML" data-modal-close-on-success>
+      {{ thumb(r.id, r.image) }}
+      <span class="pick-name">{{ r.name }}</span>
+      <span class="pick-meta">
+        {% if r.current %}<span class="badge kept">Current</span>{% elif r.in_plan %}<span class="badge muted-badge">In this plan</span>{% endif %}
+        {{ effort_badge(r.effort, unrated=True) }}
+      </span>
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+{% if more %}<p class="muted picker-note">…and {{ more }} more. Search to narrow the list.</p>{% endif %}
+{% endif %}

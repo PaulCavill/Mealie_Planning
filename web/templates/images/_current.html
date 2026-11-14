@@ -1,0 +1,8 @@
+<section class="card current-image" id="current-image" aria-labelledby="cur-h">
+  <h2 id="cur-h">Current image</h2>
+  {% if message %}<div class="alert alert-{{ message[0] }}" role="{{ 'alert' if message[0] == 'error' else 'status' }}">{{ message[1] }}</div>{% endif %}
+  <div class="current-frame">
+    <img src="{{ thumb_url(recipe.id, recipe.image, 'original') }}" alt="Current image of {{ recipe.name }}" width="640" height="480">
+  </div>
+  {% if not recipe.image %}<p class="muted">This recipe has no image yet — a placeholder is shown.</p>{% endif %}
+</section>
