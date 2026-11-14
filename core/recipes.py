@@ -31,6 +31,7 @@ def summarize(recipe: dict) -> dict:
         "is_dinner": DINNER_TAG in tags,
         "effort": effort_of(recipe),
         "tags": tags,
+        "image": recipe.get("image") or None,  # Mealie's image version token; None = no image
     }
 
 

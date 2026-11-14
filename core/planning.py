@@ -357,7 +357,11 @@ def _build_shopping_list(
     week_start: date,
     entries: list[dict],
     progress: Progress | None,
+    kept_scales: dict[str, float] | None = None,
 ) -> dict:
+    """`kept_scales` maps a date to the scale factor of the dinner already in
+    Mealie on that day; kept days carry no scale_factor of their own."""
+    kept_scales = kept_scales or {}
     name = f"Week of {week_start.strftime('%d %b %Y')}"
     for existing in client.list_shopping_lists():
         if existing.get("name") == name:
@@ -369,7 +373,8 @@ def _build_shopping_list(
     list_id = client.create_shopping_list(name)["id"]
     for entry in entries:
         if entry.get("recipe_id"):
-            client.add_recipe_to_list(list_id, entry["recipe_id"], scale=entry.get("scale_factor") or 1.0)
+            scale = entry.get("scale_factor") or kept_scales.get(entry.get("date")) or settings.scale_factor(None)
+            client.add_recipe_to_list(list_id, entry["recipe_id"], scale=scale)
 
     removed = remove_pantry_staples(client, settings, list_id)
     if removed and progress:
@@ -416,6 +421,11 @@ def commit_plan(
     # Re-read the plan so a stale preview can't double-book a day.
     dates = [date.fromisoformat(d["date"]) for d in days]
     current_by_date = {e["date"]: e for e in _dinners(client, min(dates), max(dates))}
+    # Kept dinners are scaled for the household too, from their recipe's servings.
+    kept_scales = {
+        day_iso: settings.scale_factor(e["recipe"].get("recipeServings"))
+        for day_iso, e in current_by_date.items() if e.get("recipe")
+    }
 
     created = 0
     weeks = []
@@ -440,7 +450,7 @@ def commit_plan(
                 created += 1
         result = {"week_start": week["week_start"], "entries": entries}
         if create_shopping_list:
-            result.update(_build_shopping_list(client, settings, week_start, entries, progress))
+            result.update(_build_shopping_list(client, settings, week_start, entries, progress, kept_scales))
         weeks.append(result)
 
     return {"weeks": weeks, "created": created, "deleted": deleted, "warnings": warnings}

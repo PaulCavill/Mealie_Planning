@@ -285,3 +285,19 @@ def test_replacement_options_and_replace_day(library):
     assert result["replaced"]["recipe_name"] == "Recipe 00"
     on_day = [e for e in library.mealplans if e["date"] == target.isoformat()]
     assert [e["recipe"]["id"] for e in on_day] == [chosen["id"]]
+
+
+def test_shopping_list_scales_kept_dinners_for_the_household(mealie):
+    for i in range(10):
+        mealie.add_recipe(f"Meal {i}", ingredients=[f"thing {i}"])
+    kept = mealie.add_recipe("Big Roast", servings=2, ingredients=["roast"])
+    mealie.add_plan(START, kept)
+
+    result = planning.commit_plan(mealie, SETTINGS, preview(mealie), create_shopping_list=True)
+
+    week = result["weeks"][0]
+    assert week["entries"][0]["type"] == "existing" and week["entries"][0]["scale_factor"] is None
+    scales = {i["food"]["name"]: i["scale"] for i in mealie.shopping_items
+              if i["shoppingListId"] == week["shopping_list_id"]}
+    assert scales["roast"] == SETTINGS.scale_factor(2) == 1.75  # not 1.0
+    assert {v for k, v in scales.items() if k != "roast"} == {0.88}

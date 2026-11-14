@@ -184,3 +184,9 @@ def test_set_image_and_auto_pick(mealie, monkeypatch):
     assert mealie.images["soup"][0] == "cover.png" and len(mealie.images["soup"][1]) == 30_000
     monkeypatch.setattr(images, "search_image_candidates", lambda name, ings=None: [{"url": "https://ok/small.jpg"}])
     assert images.auto_set_image(mealie, "soup", "Soup") is False
+
+
+def test_summarize_exposes_the_image_version_token():
+    assert recipes.summarize({"id": "1", "name": "Soup", "image": "ab12"})["image"] == "ab12"
+    assert recipes.summarize({"id": "1", "name": "Soup", "image": None})["image"] is None
+    assert recipes.summarize({"id": "1", "name": "Soup"})["image"] is None
