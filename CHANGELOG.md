@@ -12,7 +12,7 @@ Nothing yet.
 
 The command-line scripts became a web app that runs in Docker. The CLI is still there and shares its logic and settings with the web app.
 
-This release has been run against the bundled fake Mealie only. The Docker image has not been built yet, and nothing has been tested on TrueNAS. See "What has and has not been tested" in the [README](README.md#what-has-and-has-not-been-tested).
+This release has been run against the bundled fake Mealie only. The Docker image was built and run only in the development environment, never against a real Mealie, and nothing has been tested on TrueNAS. See "What has and has not been tested" in the [README](README.md#what-has-and-has-not-been-tested).
 
 ### Added
 

@@ -4,7 +4,7 @@ Mealie helper CLI
 
 Commands:
   suggest             Ask Claude AI to suggest meals and import them into Mealie
-  plan                Generate fortnightly meal plans (every 2nd week, starting this Saturday)
+  plan                Generate meal plans for the weeks and days set in Settings
   recipes             List all recipes in your Mealie library
   week                Show this week's current meal plan (or the next N days)
   tag-dinners         Interactively mark recipes as dinner
@@ -58,7 +58,10 @@ def cmd_suggest(args):
     except CoreError as e:
         _fail(f"Error: {e}")
 
-    print(f"\nImporting {len(recipes)} recipes into Mealie...\n")
+    if not args.dry_run:
+        print(f"\nImporting {len(recipes)} recipes into Mealie...\n")
+    else:
+        print(f"\n{len(recipes)} recipes generated (dry run, nothing imported):\n")
     if args.dry_run:
         for recipe in recipes:
             print(f"  [dry-run] {recipe.get('name', 'Unknown')} ({recipe.get('recipeCuisine', '')})")
@@ -147,7 +150,7 @@ def cmd_recipes(args):
         return
     print(f"\n{len(recipes)} recipes in your Mealie library:\n")
     for r in recipes:
-        print(f"  {r['name']:<50} ({r['servings'] or '?'} servings)  [{r['slug']}]")
+        print(f"  {r['name']:<50} ({format(r['servings'], 'g') if r['servings'] else '?'} servings)  [{r['slug']}]")
     print()
 
 
@@ -393,14 +396,14 @@ def main():
 
     # suggest
     s = sub.add_parser("suggest", help="Ask Claude AI to suggest and import meals")
-    s.add_argument("--count", type=int, help="Number of meals to suggest (default: 14)")
+    s.add_argument("--count", type=int, help="Number of meals to suggest (default: the count in Settings, initially 14)")
     s.add_argument("--dry-run", action="store_true", help="Preview suggestions without importing")
     s.add_argument("--restrict", help="Additional constraint for Claude (e.g. 'no chicken')")
     s.set_defaults(func=cmd_suggest)
 
     # plan
-    p = sub.add_parser("plan", help="Generate fortnightly meal plans starting this Saturday")
-    p.add_argument("--start", help="Override start Saturday (YYYY-MM-DD)")
+    p = sub.add_parser("plan", help="Generate meal plans for the weeks and days set in Settings")
+    p.add_argument("--start", help="Start date (YYYY-MM-DD); defaults to the next week start day from Settings")
     p.add_argument("--shopping-list", action="store_true", help="Also create shopping lists in Mealie")
     p.add_argument("--override-plan", action="store_true", help="Replace existing meal plans for these dates")
     p.add_argument("--dry-run", action="store_true", help="Show the plan that would be created without writing it")

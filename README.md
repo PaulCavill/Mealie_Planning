@@ -383,6 +383,5 @@ Other notes:
 - The app, the CLI and the test suite have been run against the bundled **fake Mealie** only, not against a real Mealie instance in this release cycle. Most of the Mealie API calls are the ones the 1.0 CLI used against a real instance, but the paging through long lists and the tag removal are new and have only met the fake.
 - Recipe generation was exercised in the browser with a stand-in for Claude, not with a real Anthropic API key.
 - Web image search could not be reached from the development environment; the picker was exercised with stand-in results.
-- **The Docker image has not been built or run**, and the GitHub workflow has not run yet. The `Dockerfile`, compose file and workflow are untested as written.
-- `TZ` relies on the base image (`python:3.12-slim`) shipping time zone data; this was not checked.
+- The Docker image was built and run in the development environment, with one change: an extra certificate so `pip` could get through that environment's proxy. It started, passed its health check, honoured `TZ`, saved settings as uid 568, and reported unhealthy with a root-owned data folder. The `Dockerfile` exactly as committed has not been built, the image was not connected to a Mealie instance, and the GitHub workflow has not run yet.
 - **Nothing has been tested on TrueNAS.**
