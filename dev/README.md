@@ -66,6 +66,9 @@ All list endpoints return Mealie's envelope (`page`, `per_page`, `total`, `total
 - **Images** are SVG placeholders served under the `.webp` names with `Content-Type: image/svg+xml`; an uploaded
   image is served byte-for-byte with its own content type for all three sizes (no resizing / webp conversion).
   Real Mealie returns 404 for a recipe with no image; the fake always serves a placeholder, even when `image` is null.
+  To set a recipe's cover from an image URL on the fake (or any other `127.0.0.1` / private address) start the
+  planner with `ALLOW_PRIVATE_IMAGE_HOSTS=1`: by default it refuses to download images from loopback and private
+  networks. That switch is for development and tests only - never set it on a real install.
 - **Scraping** has no network: `create/url` and `test-scrape-url` invent a recipe named after the last URL path
   segment. A URL containing `fail` in host or path returns 400. `create/html-or-json` understands JSON (or JSON-LD
   embedded in HTML) only.

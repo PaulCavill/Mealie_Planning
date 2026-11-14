@@ -81,6 +81,8 @@ def test_other_tables_can_share_the_database(tmp_path):
     {"claude_model": " "},
     {"system_prompt": "Use {unknown} and {household}"},
     {"system_prompt": 'Example: {"name": "x"}'},
+    {"system_prompt": "For {household.members} people"},  # AttributeError from str.format
+    {"system_prompt": "For {servings[0]} servings"},  # TypeError
     {"adults": "three"},
 ])
 def test_invalid_settings_are_rejected_and_not_saved(tmp_path, change):

@@ -171,6 +171,79 @@ def test_commit_does_not_double_book_a_day_planned_since_the_preview(library):
     assert sum(e["date"] == START.isoformat() for e in library.mealplans) == 1
 
 
+def test_a_day_mealie_refuses_is_reported_and_the_rest_are_saved(library):
+    for recipe in library.recipes.values():
+        recipe["recipeIngredient"] = [{"note": f"for {recipe['name']}"}]
+    p = preview(library)
+    bad = days_of(p)[3]
+    library.fail_plan_dates.add(bad["date"])
+    result = planning.commit_plan(library, SETTINGS, p, create_shopping_list=True)
+    assert result["created"] == 9
+    assert [(f["date"], f["recipe_id"]) for f in result["failed"]] == [(bad["date"], bad["recipe_id"])]
+    assert result["failed"][0]["error"]
+    [warning] = result["warnings"]
+    assert warning["date"] == bad["date"] and bad["recipe_name"] in warning["message"]
+    assert bad["date"] not in {e["date"] for e in library.mealplans}
+    # The result and the shopping list describe what was actually written.
+    written = [e["date"] for w in result["weeks"] for e in w["entries"]]
+    assert bad["date"] not in written and len(written) == 9
+    bought_for = sorted(i["food"]["name"] for i in library.shopping_items)
+    assert bought_for == sorted(f"for {d['recipe_name']}" for d in days_of(p) if d is not bad)
+
+
+def test_override_deletes_an_old_dinner_only_after_its_replacement_is_in(library):
+    kept_safe = library.add_plan(START, library.recipes["recipe-10"])
+    replaced = library.add_plan(START + timedelta(days=1), library.recipes["recipe-11"])
+    p = preview(library, override=True)
+    library.fail_plan_dates.add(START.isoformat())
+    library.calls.clear()
+    result = planning.commit_plan(library, SETTINGS, p)
+
+    assert result["created"] == 9 and len(result["failed"]) == 1
+    assert [e["entry_id"] for e in result["deleted"]] == [replaced["id"]]
+    # Saturday's add failed, so Saturday's old dinner is still there; Sunday was swapped.
+    assert [e["id"] for e in library.mealplans if e["date"] == START.isoformat()] == [kept_safe["id"]]
+    assert "left in place" in result["warnings"][0]["message"]
+    assert result["weeks"][0]["entries"][0]["type"] == "existing"
+    sunday = [e for e in library.mealplans if e["date"] == (START + timedelta(days=1)).isoformat()]
+    assert len(sunday) == 1 and sunday[0]["id"] != replaced["id"]
+    # No delete ever came before the first add.
+    writes = [method for method, path in library.writes() if "mealplans" in path]
+    assert writes[0] == "POST" and writes.index("DELETE") > writes.index("POST")
+
+
+def test_when_every_dinner_is_refused_nothing_is_deleted_and_the_save_fails(library):
+    old = library.add_plan(START, library.recipes["recipe-10"])
+    p = preview(library, override=True)
+    library.fail_plan_dates.update(d["date"] for d in days_of(p))
+    library.shopping_lists.append({"id": "keep", "name": "Week of 14 Nov 2026"})
+    with pytest.raises(PlanningError, match="Nothing was saved"):
+        planning.commit_plan(library, SETTINGS, p, create_shopping_list=True)
+    assert [e["id"] for e in library.mealplans] == [old["id"]]
+    assert [sl["id"] for sl in library.shopping_lists] == ["keep"]  # lists untouched too
+
+
+def test_a_failed_delete_or_shopping_list_is_a_warning_not_a_crash(library):
+    old = library.add_plan(START, library.recipes["recipe-10"])
+    p = preview(library, override=True)
+    library.fail_delete_ids.add(old["id"])
+    library.shopping_lists.append({"id": "stuck", "name": "Week of 14 Nov 2026"})
+    library.fail_delete_ids.add("stuck")
+    result = planning.commit_plan(library, SETTINGS, p, create_shopping_list=True)
+    assert result["created"] == 10 and result["deleted"] == [] and result["failed"] == []
+    messages = [w["message"] for w in result["warnings"]]
+    assert any("two dinners" in m for m in messages) and any("shopping list" in m for m in messages)
+    assert "shopping_list_id" not in result["weeks"][0] and "shopping_list_id" in result["weeks"][1]
+
+
+def test_preview_can_say_which_shopping_lists_saving_would_replace(library):
+    p = preview(library)
+    assert planning.shopping_lists_to_replace(library, p) == []
+    library.shopping_lists += [{"id": "a", "name": "Week of 28 Nov 2026"}, {"id": "b", "name": "Groceries"}]
+    assert planning.shopping_lists_to_replace(library, p) == ["Week of 28 Nov 2026"]
+    assert library.writes() == []
+
+
 def test_second_run_keeps_everything(library):
     planning.commit_plan(library, SETTINGS, preview(library))
     again = preview(library, seed=5)
@@ -285,6 +358,34 @@ def test_replacement_options_and_replace_day(library):
     assert result["replaced"]["recipe_name"] == "Recipe 00"
     on_day = [e for e in library.mealplans if e["date"] == target.isoformat()]
     assert [e["recipe"]["id"] for e in on_day] == [chosen["id"]]
+
+
+def test_replace_day_adds_before_it_deletes_and_checks_the_recipe(library):
+    target = START + timedelta(days=2)
+    current = library.add_plan(target, library.recipes["recipe-00"])
+    on_day = lambda: [e["id"] for e in library.mealplans if e["date"] == target.isoformat()]  # noqa: E731
+
+    for bogus in ("no-such-id", library.recipes["porridge"]["id"]):  # unknown, and not a dinner
+        with pytest.raises(PlanningError, match="not in the dinner library"):
+            planning.replace_day(library, target, bogus)
+    assert library.writes() == [] and on_day() == [current["id"]]
+
+    library.fail_plan_dates.add(target.isoformat())  # Mealie refuses the new entry
+    with pytest.raises(RuntimeError):
+        planning.replace_day(library, target, library.recipes["recipe-05"]["id"])
+    assert on_day() == [current["id"]]  # the old dinner was not deleted first
+    library.fail_plan_dates.clear()
+
+    library.fail_delete_ids.add(current["id"])  # the old one can't be removed: undo the add
+    with pytest.raises(PlanningError, match="left as it was"):
+        planning.replace_day(library, target, library.recipes["recipe-05"]["id"])
+    assert on_day() == [current["id"]]
+    library.fail_delete_ids.clear()
+
+    library.calls.clear()
+    planning.replace_day(library, target, library.recipes["recipe-05"]["id"])
+    assert [method for method, path in library.writes()] == ["POST", "DELETE"]
+    assert [e["recipe"]["name"] for e in library.mealplans if e["date"] == target.isoformat()] == ["Recipe 05"]
 
 
 def test_shopping_list_scales_kept_dinners_for_the_household(mealie):

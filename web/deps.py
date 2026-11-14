@@ -92,7 +92,8 @@ def auth_enabled() -> bool:
 # --- storage -----------------------------------------------------------------
 
 STORAGE_FIX = ("Make that folder writable by that user (for Docker: `chown` the host folder or dataset mounted "
-               "at /data to that user id, or set PUID and PGID to the folder's owner), then restart the app.")
+               "at /data to that user id, or set PUID and PGID to the folder's owner and recreate the container). "
+               "The app carries on by itself once the folder is writable.")
 
 _storage_ok_for: str | None = None  # the database path that last passed the check
 

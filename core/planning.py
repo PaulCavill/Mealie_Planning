@@ -30,6 +30,8 @@ import random
 from datetime import date, timedelta
 from typing import Callable
 
+import requests
+
 from mealie_client import MealieClient
 from .errors import PlanningError
 from .recipes import effort_of
@@ -399,6 +401,20 @@ def _build_shopping_list(
 
 
 def _reason(error: Exception) -> str:
+    """Why a single write to Mealie failed, short enough to sit in a sentence."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if status:
+        try:
+            detail = response.json().get("detail")
+            detail = detail.get("message") if isinstance(detail, dict) else detail
+        except Exception:
+            detail = None
+        return f"Mealie answered {status}" + (f": {str(detail)[:160]}" if isinstance(detail, str) and detail else "")
+    if isinstance(error, requests.Timeout):
+        return "Mealie took too long to answer"
+    if isinstance(error, requests.ConnectionError):
+        return "Mealie could not be reached"
     return str(error).strip() or type(error).__name__
 
 

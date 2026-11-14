@@ -231,6 +231,63 @@ def test_swap_replaces_a_planned_dinner(web, mealie):
     assert now["recipe"]["id"] == replacement["id"] and now["id"] != entry["id"]
 
 
+def test_swap_with_an_unknown_recipe_leaves_the_dinner_in_place(web, mealie):
+    today = date.today()
+    entry = next(e for e in mealie.list_meal_plans(today, None) if e["entryType"] == "dinner" and e.get("recipe"))
+    not_dinner = next(r for r in mealie.list_recipes()
+                      if not any(t["slug"] == "dinner" for t in r.get("tags") or []))
+    for recipe_id in ("00000000-0000-0000-0000-000000000000", not_dinner["id"]):
+        refused = web.post("/plan/swap", data={"date": entry["date"], "recipe_id": recipe_id}, headers=HTMX)
+        assert "not in the dinner library" in refused.text and refused.headers["hx-retarget"] == "#toast"
+        assert dinners(mealie, [entry["date"]])[entry["date"]]["id"] == entry["id"]
+
+
+def test_a_plan_that_only_partly_saves_says_exactly_what_happened(web, mealie, monkeypatch):
+    from web import previews
+
+    created = web.post("/plan/preview", data={"start": ""}, follow_redirects=False)
+    preview_id = created.headers["location"].rsplit("/", 1)[1]
+    proposed = [d for week in previews.get(preview_id)["data"]["weeks"] for d in week["days"] if d["type"] == "recipe"]
+    assert len(proposed) >= 2
+    refused = {proposed[0]["date"]}
+    real_add = MealieClient.add_meal_plan_entry
+
+    def flaky_add(self, plan_date, entry_type, recipe_id=None, **kwargs):
+        if plan_date.isoformat() in refused:
+            raise requests.ConnectionError("Mealie went away")
+        return real_add(self, plan_date, entry_type, recipe_id=recipe_id, **kwargs)
+
+    monkeypatch.setattr(MealieClient, "add_meal_plan_entry", flaky_add)
+    saved = web.post(f"/plan/preview/{preview_id}/commit", follow_redirects=False)
+    page = web.get(saved.headers["location"])
+    assert "Plan partly saved" in page.text and "1 could not be added" in page.text
+    assert f"{len(proposed) - 1} dinner" in page.text and proposed[0]["recipe_name"].replace("&", "&amp;") in page.text
+    result = previews.get(preview_id)["result"]
+    assert [f["date"] for f in result["failed"]] == [proposed[0]["date"]]
+    assert set(dinners(mealie, [d["date"] for d in proposed])) & {d["date"] for d in proposed} == \
+        {d["date"] for d in proposed[1:]}
+
+    # If Mealie refuses everything, nothing is saved and the preview is still a draft.
+    another = web.post("/plan/preview", data={"start": proposed[0]["date"]}, follow_redirects=False)
+    another_id = another.headers["location"].rsplit("/", 1)[1]
+    refused.update(d["date"] for week in previews.get(another_id)["data"]["weeks"] for d in week["days"])
+    nothing = web.post(f"/plan/preview/{another_id}/commit", follow_redirects=False)
+    assert nothing.status_code == 400 and "Nothing was saved" in nothing.text
+    assert previews.get(another_id)["status"] == "draft"
+
+
+def test_preview_warns_which_shopping_lists_would_be_replaced(web, mealie):
+    from web import previews
+
+    created = web.post("/plan/preview", data={"start": "", "shopping_list": "1"}, follow_redirects=False)
+    assert "Replaces the existing list" not in web.get(created.headers["location"]).text
+    week = previews.get(created.headers["location"].rsplit("/", 1)[1])["data"]["weeks"][0]["week_start"]
+    name = f"Week of {date.fromisoformat(week).strftime('%d %b %Y')}"
+    mealie.create_shopping_list(name)
+    page = web.get(created.headers["location"]).text
+    assert "Replaces the existing list" in page and name in page and "ticked off" in page
+
+
 # --- recipes -------------------------------------------------------------------
 
 def test_recipe_filters_and_search(web, mealie):
@@ -408,6 +465,143 @@ def test_login_is_required_only_when_a_password_is_set(web, monkeypatch):
     assert web.get("/", follow_redirects=False).status_code == 303
 
 
+def test_cross_site_requests_are_refused_even_without_a_password(web, mealie):
+    """With no APP_PASSWORD there is no login, but a page on another site could
+    still make the user's browser post to this app."""
+    today = date.today()
+    entry = next(e for e in mealie.list_meal_plans(today, None) if e["entryType"] == "dinner" and e.get("recipe"))
+    other = next(r for r in mealie.list_dinner_recipes() if r["id"] != entry["recipe"]["id"])
+    form = {"date": entry["date"], "recipe_id": other["id"]}
+    for headers in ({"Origin": "http://evil.example"}, {"Referer": "http://evil.example/page"},
+                    {"Origin": "null"}, {"Sec-Fetch-Site": "cross-site"},
+                    {"Origin": "http://evil.example", "Referer": "http://testserver/"}):
+        forged = web.post("/plan/swap", data=form, headers=headers, follow_redirects=False)
+        assert forged.status_code == 403 and "refused" in forged.text, headers
+    assert web.post("/settings", data={"adults": "9"}, headers={"Origin": "http://evil.example"}).status_code == 403
+    assert web.post("/maintenance/parse", headers={"Origin": "http://evil.example"},
+                    follow_redirects=False).status_code == 403
+    assert dinners(mealie, [entry["date"]])[entry["date"]]["id"] == entry["id"]  # nothing happened
+
+    # Our own pages (and a reverse proxy that passes the original host on) still work,
+    # as does a script that sends neither header.
+    for headers in ({"Origin": "http://testserver"}, {"Referer": "http://testserver/"},
+                    {"Origin": "https://planner.example", "X-Forwarded-Host": "planner.example"}, {}):
+        ok = web.post("/plan/preview", data={"start": ""}, headers=headers, follow_redirects=False)
+        assert ok.status_code == 303, headers
+    assert web.get("/", headers={"Origin": "http://evil.example"}).status_code == 200  # reads are not affected
+
+
+def test_an_unwritable_data_folder_is_reported_clearly_everywhere(web, tmp_path, monkeypatch, caplog):
+    import os
+
+    assert web.get("/healthz").status_code == 200
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("")
+    monkeypatch.setenv("DATA_DIR", str(blocker / "data"))  # can't be created, whoever we run as
+
+    health = web.get("/healthz")
+    assert health.status_code == 503 and health.json()["status"] == "error"
+    assert "not-a-folder" in health.json()["reason"] and f"user id {os.getuid()}" in health.json()["reason"]
+    for path in PAGES + ["/login"]:
+        page = web.get(path)
+        assert page.status_code == 503 and "can't save anything" in page.text, path
+        assert "not-a-folder" in page.text and "PUID" in page.text and "Traceback" not in page.text
+    saved = web.post("/settings", data=settings_form(adults="2"))
+    assert saved.status_code == 503 and "not-a-folder" in saved.text
+    toast = web.post("/plan/preview", data={"start": ""}, headers=HTMX)
+    assert toast.headers["hx-retarget"] == "#toast" and "cannot be written" in toast.text
+    assert web.get("/static/app.css").status_code == 200
+
+    # With a login on, the problem is not papered over with a throwaway session secret.
+    from web import auth
+    monkeypatch.setenv("APP_PASSWORD", "s3cret")
+    assert not hasattr(auth, "_fallback_secret")
+    with pytest.raises(Exception):
+        auth.new_session()
+    assert web.post("/login", data={"password": "s3cret"}, headers={"Origin": "http://testserver"}).status_code == 503
+    monkeypatch.delenv("APP_PASSWORD")
+
+    # Startup logs one clear line and still serves the notice.
+    from web.app import app
+    with caplog.at_level("ERROR", logger="web"), TestClient(app) as restarted:
+        assert restarted.get("/").status_code == 503
+    lines = [r.getMessage() for r in caplog.records if "cannot be written" in r.getMessage()]
+    assert len(lines) == 1 and "not-a-folder" in lines[0] and f"user id {os.getuid()}" in lines[0]
+
+    # Fixed (here: pointed back at a good folder) - it recovers without a restart.
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert web.get("/healthz").status_code == 200 and web.get("/settings").status_code == 200
+
+
+def test_a_read_only_database_is_caught_by_the_storage_check(tmp_path):
+    import os
+    from core import db
+
+    assert db.storage_problem(tmp_path / "planner.db") is None
+    os.chmod(tmp_path / "planner.db", 0o444)
+    os.chmod(tmp_path, 0o555)
+    try:
+        if os.access(tmp_path / "planner.db", os.W_OK):
+            pytest.skip("running as a user that ignores file permissions (root)")
+        problem = db.storage_problem(tmp_path / "planner.db")
+        assert problem and str(tmp_path) in problem and f"user id {os.getuid()}" in problem
+    finally:
+        os.chmod(tmp_path, 0o755)
+
+
+def test_concurrent_first_requests_agree_on_one_session_secret(env, monkeypatch):
+    from core import db
+    from web import auth
+
+    # Deterministically: another request stores its secret just before ours is inserted.
+    winner = "ab" * 32
+    real_connect = db.connect
+
+    class Raced:
+        def __init__(self, conn):
+            self.conn, self.raced = conn, False
+
+        def execute(self, sql, *args):
+            if sql.startswith("INSERT") and not self.raced:
+                self.raced = True
+                other = real_connect()
+                other.execute("INSERT INTO web_meta (key, value) VALUES ('session_secret', ?)", (winner,))
+                other.commit()
+                other.close()
+            return self.conn.execute(sql, *args)
+
+        def __enter__(self):
+            return self.conn.__enter__()
+
+        def __exit__(self, *exc):
+            return self.conn.__exit__(*exc)
+
+        def close(self):
+            self.conn.close()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(db, "connect", lambda *a, **k: Raced(real_connect(*a, **k)))
+        assert auth._secret() == bytes.fromhex(winner)  # we use the stored one, not our own
+    assert auth._secret() == bytes.fromhex(winner)
+    (env.data_dir / "planner.db").unlink()
+
+    # And for real, with threads.
+    barrier = threading.Barrier(8)
+    secrets_seen = []
+
+    def first_request():
+        barrier.wait()
+        secrets_seen.append(auth._secret())
+
+    threads = [threading.Thread(target=first_request) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(secrets_seen) == 8 and len(set(secrets_seen)) == 1
+    assert auth._secret() == secrets_seen[0]
+
+
 def test_tampered_or_expired_session_cookies_are_rejected(env, monkeypatch):
     from web import auth
 
@@ -425,28 +619,59 @@ def test_tampered_or_expired_session_cookies_are_rejected(env, monkeypatch):
 
 # --- background jobs -----------------------------------------------------------------
 
+def structured_ingredients(mealie) -> dict:
+    """slug -> the (quantity, unit, food, note) of every already-parsed ingredient."""
+    out = {}
+    for summary in mealie.list_recipes():
+        rows = [(i["quantity"], (i.get("unit") or {}).get("name"), i["food"]["name"], i.get("note"))
+                for i in mealie.get_recipe(summary["slug"])["recipeIngredient"] if i.get("food")]
+        if rows:
+            out[summary["slug"]] = rows
+    return out
+
+
 def test_parse_ingredients_job_runs_to_completion(web, mealie):
     note_only = next(r for r in mealie.list_recipes() if r["name"] == "Beef Rendang")
     assert not any(i.get("food") for i in mealie.get_recipe(note_only["slug"])["recipeIngredient"])
+    seeded = structured_ingredients(mealie)
+    roast = mealie.get_recipe(next(r["slug"] for r in mealie.list_recipes()
+                                   if r["name"] == "Roast Chicken with Vegetables"))
+    assert any(i["food"]["name"] == "potatoes" and i["note"] for i in roast["recipeIngredient"])
+    foods_before = {f["name"] for f in mealie.get_all("/api/foods")}
 
     started = web.post("/maintenance/parse", follow_redirects=False)
     assert started.status_code == 303 and started.headers["location"].startswith("/jobs/")
     job = finished(started.headers["location"])
     total = len(mealie.list_recipes())
-    assert job["status"] == "done" and job["result"]["parsed"] + job["result"]["failed"] == total
+    result = job["result"]
+    assert job["status"] == "done" and result["parsed"] + result["unchanged"] + result["failed"] == total
+    assert result["parsed"] and result["unchanged"] and not result["failed"]
     assert (job["progress_done"], job["progress_total"]) == (total, total)
     assert len(job["log"]) == total + 1 and job["duration"] is not None
     assert any(i.get("food") for i in mealie.get_recipe(note_only["slug"])["recipeIngredient"])
 
+    # Ingredients that were already structured are exactly as they were: "1 kg potatoes, halved"
+    # has not become a food called "halved".
+    after = structured_ingredients(mealie)
+    assert {slug: after[slug][:len(rows)] for slug, rows in seeded.items()} == seeded
+    prep_notes = {note for rows in seeded.values() for _, _, _, note in rows if note}
+    assert prep_notes and not prep_notes & ({f["name"] for f in mealie.get_all("/api/foods")} - foods_before)
+
     page = web.get(started.headers["location"])
     assert page.status_code == 200 and "hx-trigger" not in page.text  # finished: no more polling
+    assert "already up to date" in page.text
+
+    # A second run finds nothing left to do and changes nothing.
+    again = finished(web.post("/maintenance/parse", follow_redirects=False).headers["location"])
+    assert again["result"]["parsed"] == 0 and again["result"]["unchanged"] == total
+    assert structured_ingredients(mealie) == after
     fragment = web.get(started.headers["location"] + "/fragment", headers=HTMX)
     assert fragment.text.lstrip().startswith('<div id="job"') and "Finished" in fragment.text
     history = web.get("/maintenance").text
     assert "Parse all ingredients" in history and "View log" in history
 
     retry = web.post(f"/maintenance/parse/{note_only['slug']}", headers=HTMX)
-    assert retry.status_code == 200 and "Parsed" in retry.text
+    assert retry.status_code == 200 and "Nothing to parse" in retry.text
 
 
 class FakeAnthropic:
@@ -515,7 +740,7 @@ def test_generate_review_and_import_with_a_fake_claude(web, mealie, monkeypatch)
     assert {t["name"] for t in by_name["Test Kitchen Curry 2-1"]["tags"]} >= {"dinner", "effort-3"}
 
 
-def test_import_from_url_preview_and_real_import(web, mealie):
+def test_import_from_url_preview_and_real_import(web, mealie, monkeypatch):
     before = len(mealie.list_recipes())
     assert web.post("/generate/scrape", data={"urls": "not a url"}).status_code == 400
     assert web.post("/generate/scrape", data={"urls": "  \n"}).status_code == 400
@@ -527,6 +752,15 @@ def test_import_from_url_preview_and_real_import(web, mealie):
     assert [r["status"] for r in job["result"]["results"]] == ["ok", "error"]
     assert len(mealie.list_recipes()) == before
     assert "nothing was imported" in web.get(preview.headers["location"]).text
+
+    # Real Mealie answers a failed test scrape with 200 and a sentence instead of an error.
+    with monkeypatch.context() as patch:
+        patch.setattr(MealieClient, "test_scrape", lambda self, url: "recipe_scrapers was unable to scrape this URL")
+        unreadable = web.post("/generate/scrape", data={"urls": urls, "dry_run": "1"}, follow_redirects=False)
+        job = finished(unreadable.headers["location"])
+    assert [r["status"] for r in job["result"]["results"]] == ["error", "error"]
+    page = web.get(unreadable.headers["location"]).text
+    assert "0 of 2 pages could be read" in page and "Import these" not in page and "Import this" not in page
 
     real = web.post("/generate/scrape", data={"urls": urls}, follow_redirects=False)
     job = finished(real.headers["location"])
@@ -612,12 +846,18 @@ def test_image_page_search_failure_and_setting_an_image(web, mealie, monkeypatch
     grid = web.get(f"/images/{recipe['slug']}/search", params={"q": "something else"}, headers=HTMX)
     assert "https://img.example/a_t.jpg" in grid.text and "800×600" in grid.text
 
-    monkeypatch.setattr("core.images._download_image", lambda url, default_content_type="": (b"\x89PNG fake", "image/png"))
-    updated = web.post(f"/images/{recipe['slug']}/set", data={"url": "https://img.example/a.jpg"}, headers=HTMX)
-    assert "Image updated" in updated.text and mealie.get_recipe(recipe["slug"])["image"]
+    with monkeypatch.context() as patch:
+        patch.setattr("core.images._download_image", lambda url, default_content_type="": (b"\x89PNG fake", "image/png"))
+        updated = web.post(f"/images/{recipe['slug']}/set", data={"url": "https://img.example/a.jpg"}, headers=HTMX)
+        assert "Image updated" in updated.text and mealie.get_recipe(recipe["slug"])["image"]
 
-    monkeypatch.setattr("core.images._download_image", lambda url, default_content_type="": None)
-    refused = web.post(f"/images/{recipe['slug']}/set", data={"url": "https://img.example/b.jpg"}, headers=HTMX)
-    assert "could not be used" in refused.text
+        patch.setattr("core.images._download_image", lambda url, default_content_type="": None)
+        refused = web.post(f"/images/{recipe['slug']}/set", data={"url": "https://img.example/b.jpg"}, headers=HTMX)
+        assert "could not be used" in refused.text
     assert "starting with http" in web.post(f"/images/{recipe['slug']}/set", data={"url": "ftp://x"}, headers=HTMX).text
+
+    # The real downloader refuses addresses inside the network, and says why.
+    monkeypatch.delenv("ALLOW_PRIVATE_IMAGE_HOSTS", raising=False)
+    inward = web.post(f"/images/{recipe['slug']}/set", data={"url": f"{mealie.base_url}/api/app/about"}, headers=HTMX)
+    assert "private or local network" in inward.text and "Image updated" not in inward.text
     assert web.get("/images/no-such-recipe").status_code == 502
