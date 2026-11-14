@@ -78,7 +78,7 @@ You need Docker, a running Mealie, and a Mealie API token. An Anthropic API key 
          MEALIE_TOKEN: ${MEALIE_TOKEN}              # Mealie > Profile > API Tokens
          ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}  # only needed for recipe generation
          APP_PASSWORD: ${APP_PASSWORD:-}            # optional: set to require a login
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}          # optional: domain names the app may be opened by
+         ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}          # optional: domain names the app may be opened by
          TZ: ${TZ:-Pacific/Auckland}
        volumes:
          # Settings, plan previews and job history. Create the folder yourself
