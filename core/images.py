@@ -133,17 +133,46 @@ def _peer_is_internal(response) -> bool:
         return False
 
 
+def _chunks(response, deadline: float):
+    """The body in pieces, each returned as soon as some bytes arrive, so the
+    caller can check the deadline between them. Reading in fixed-size blocks
+    would wait for a whole block, which a server trickling bytes never fills.
+    The socket timeout shrinks to the time left, so a silent server cannot
+    hold the read past the deadline either."""
+    raw = response.raw
+    read1 = getattr(raw, "read1", None)
+    if read1 is None:  # urllib3 before 2.x, or a stand-in in tests
+        yield from response.iter_content(4 * 1024)
+        return
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ImageDownloadError("The image took too long to download.")
+        try:
+            raw.connection.sock.settimeout(min(_READ_SECONDS, remaining))
+        except Exception:
+            pass  # no reachable socket (pooled or proxied differently); the per-read timeout still applies
+        chunk = read1(16 * 1024, decode_content=True)
+        if not chunk:
+            return
+        yield chunk
+
+
 def _download_image(url: str, default_content_type: str = "") -> tuple[bytes, str]:
     """Fetch an image as (bytes, content type). Raises ImageDownloadError with
     a message that is safe to show: only public http(s) addresses, at most
     MAX_REDIRECTS redirects (each re-checked), MAX_IMAGE_BYTES and
     DOWNLOAD_SECONDS in total."""
     deadline = time.monotonic() + DOWNLOAD_SECONDS
+    too_slow = ImageDownloadError("The image took too long to download.")
     for _ in range(MAX_REDIRECTS + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise too_slow
         _check_destination(url)
         try:
             response = requests.get(url, allow_redirects=False, stream=True, headers=_DOWNLOAD_HEADERS,
-                                    timeout=(_CONNECT_SECONDS, _READ_SECONDS))
+                                    timeout=(min(_CONNECT_SECONDS, remaining), min(_READ_SECONDS, remaining)))
         except Exception as e:
             raise ImageDownloadError("The image could not be downloaded: the site did not answer.") from e
         try:
@@ -162,16 +191,16 @@ def _download_image(url: str, default_content_type: str = "") -> tuple[bytes, st
                 raise ImageDownloadError("That address is not an image.")
             too_big = ImageDownloadError(f"That image is larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MB.")
             declared = response.headers.get("content-length", "")
-            if declared.isdigit() and int(declared) > MAX_IMAGE_BYTES:
+            if declared.isascii() and declared.isdigit() and int(declared) > MAX_IMAGE_BYTES:
                 raise too_big
             body = bytearray()
             try:
-                for chunk in response.iter_content(64 * 1024):
+                for chunk in _chunks(response, deadline):
                     body += chunk
                     if len(body) > MAX_IMAGE_BYTES:
                         raise too_big
                     if time.monotonic() > deadline:
-                        raise ImageDownloadError("The image took too long to download.")
+                        raise too_slow
             except ImageDownloadError:
                 raise
             except Exception as e:
@@ -179,8 +208,6 @@ def _download_image(url: str, default_content_type: str = "") -> tuple[bytes, st
             return bytes(body), content_type
         finally:
             response.close()
-        if time.monotonic() > deadline:  # pragma: no cover - reached only via `continue`
-            break
     raise ImageDownloadError("The image could not be downloaded: too many redirects.")
 
 

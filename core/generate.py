@@ -20,6 +20,9 @@ Progress = Callable[[str], None]
 # (always), then as many library names as fit under this cap.
 MAX_LIBRARY_NAMES_IN_PROMPT = 150
 
+# Room for a full batch (settings allow up to 10 recipes per request).
+MAX_OUTPUT_TOKENS = 16000
+
 
 def _valid_effort(recipe: dict) -> int | None:
     effort = recipe.get("effort")
@@ -46,13 +49,43 @@ def _generate_batch(ai_client, settings: Settings, batch: int, existing: list[st
     user_msg = f"Generate exactly {batch} dinner recipes. Return ONLY the JSON array, no other text."
     if restrictions:
         user_msg += f" Additional restriction: {restrictions}."
-    response = ai_client.messages.create(
-        model=settings.claude_model,
-        max_tokens=8192,
-        system=settings.render_system_prompt(existing_str),
-        messages=[{"role": "user", "content": user_msg}],
-    )
-    return _parse_recipe_array(response.content[0].text)
+    try:
+        response = ai_client.messages.create(
+            model=settings.claude_model,
+            max_tokens=MAX_OUTPUT_TOKENS,
+            system=settings.render_system_prompt(existing_str),
+            messages=[{"role": "user", "content": user_msg}],
+        )
+    except Exception as e:
+        raise GenerationError(_describe_api_error(e, settings)) from e
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise GenerationError(
+            f"Claude's answer was cut off: {batch} recipes did not fit in one reply. "
+            "Lower 'Recipes per request' in Settings and try again.")
+    text = next((getattr(block, "text", None) for block in (response.content or [])
+                 if getattr(block, "text", None)), None)
+    if not text:
+        raise GenerationError("Claude returned an empty answer.")
+    return _parse_recipe_array(text)
+
+
+def _describe_api_error(error: Exception, settings: Settings) -> str:
+    """Plain words for a failed Claude call. Matched on the SDK's class names
+    so this module does not need the SDK just to describe an error."""
+    names = {cls.__name__ for cls in type(error).__mro__}
+    if "AuthenticationError" in names or "PermissionDeniedError" in names:
+        return "Claude rejected the API key. Check ANTHROPIC_API_KEY and restart the app."
+    if "NotFoundError" in names:
+        return (f"Claude does not know the model '{settings.claude_model}'. "
+                "Check the model name in Settings.")
+    if "RateLimitError" in names:
+        return "Claude is rate limiting this API key. Wait a minute and try again."
+    if "APITimeoutError" in names or "APIConnectionError" in names:
+        return "Could not reach Claude. Check the app's internet connection and try again."
+    if "APIStatusError" in names:
+        status = getattr(error, "status_code", "")
+        return f"Claude returned an error ({status}). Try again in a moment."
+    return f"The request to Claude failed ({type(error).__name__})."
 
 
 def generate_recipes(
@@ -67,7 +100,9 @@ def generate_recipes(
 
     Returns schema.org/Recipe dicts, each with an extra integer `effort` 1-5.
     Nothing is written to Mealie. May return fewer than `count` if Claude
-    repeats itself. `ai_client` is an anthropic.Anthropic instance; by default
+    repeats itself, or if a later batch fails: the recipes from earlier
+    batches are kept and the failure is reported through `progress`. A
+    failure before anything was generated raises GenerationError. `ai_client` is an anthropic.Anthropic instance; by default
     one is created from ANTHROPIC_API_KEY.
     """
     count = settings.suggest_count if count is None else count
@@ -86,7 +121,15 @@ def generate_recipes(
     while remaining > 0:
         batch = min(remaining, settings.batch_size)
         exclude = [r["name"] for r in recipes] + list(existing_names)[:MAX_LIBRARY_NAMES_IN_PROMPT]
-        for recipe in _generate_batch(ai_client, settings, batch, exclude, restrictions):
+        try:
+            generated = _generate_batch(ai_client, settings, batch, exclude, restrictions)
+        except GenerationError as e:
+            if not recipes:
+                raise
+            if progress:
+                progress(f"Stopped early, keeping the {len(recipes)} recipes generated so far. {e}")
+            break
+        for recipe in generated:
             if recipe["name"].lower() not in seen:
                 recipes.append(recipe)
                 seen.add(recipe["name"].lower())

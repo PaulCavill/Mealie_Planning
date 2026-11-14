@@ -206,7 +206,8 @@ def preview_plan(
                        f"not a {WEEKDAY_NAMES[settings.week_start_day]} (the configured week start).",
         })
 
-    dinners = _dinners(client, starts[0] - timedelta(days=settings.lookback_days), max(planned))
+    span_first, span_last = starts[0], starts[-1] + timedelta(days=6)
+    dinners = _dinners(client, span_first - timedelta(days=settings.lookback_days), span_last)
     planned_dates = {d.isoformat() for d in planned}
 
     deletions = []
@@ -217,8 +218,11 @@ def preview_plan(
     existing_by_date = {e["date"]: e for e in dinners if e["date"] in planned_dates}
     # (date, recipe id) of every dinner known so far, for the lookback rule.
     history = [(date.fromisoformat(e["date"]), e["recipe"]["id"]) for e in dinners if e.get("recipe")]
-    # Recipes already in this plan: kept entries now, proposals as they are made.
-    used = {e["recipe"]["id"] for e in existing_by_date.values() if e.get("recipe")}
+    # Recipes already on the table during the weeks being planned: every
+    # dinner in that span (kept days, and days this plan does not fill, such
+    # as a Thursday added by hand), then proposals as they are made.
+    used = {e["recipe"]["id"] for e in dinners
+            if e.get("recipe") and span_first <= date.fromisoformat(e["date"]) <= span_last}
 
     weeks = []
     for week_start, days in zip(starts, days_by_week):
@@ -300,18 +304,26 @@ def reroll_day(
     others = [d for d in _preview_days(preview) if d is not current and d.get("recipe_id")]
     deleted_ids = {d.get("entry_id") for d in preview.get("deletions", [])}
 
-    dinners = _dinners(client, week_start - timedelta(days=settings.lookback_days), week_start - timedelta(days=1))
-    history = [
+    try:
+        week_firsts = [date.fromisoformat(w["week_start"]) for w in preview["weeks"]]
+    except (KeyError, TypeError, ValueError) as e:
+        raise PlanningError("That plan preview is not valid.") from e
+    span_first, span_last = min(week_firsts), max(week_firsts) + timedelta(days=6)
+    dinners = [
         (date.fromisoformat(e["date"]), e["recipe"]["id"])
-        for e in dinners if e.get("recipe") and e.get("id") not in deleted_ids
+        for e in _dinners(client, min(span_first, week_start - timedelta(days=settings.lookback_days)), span_last)
+        if e.get("recipe") and e.get("id") not in deleted_ids
     ]
+    history = [(day, recipe_id) for day, recipe_id in dinners if day < week_start]
     history += [(date.fromisoformat(d["date"]), d["recipe_id"]) for d in others]
+    # Dinners already in Mealie during these weeks, including days this plan does not fill.
+    in_span = {recipe_id for day, recipe_id in dinners if span_first <= day <= span_last}
 
     recipe, warnings, _ = _choose(
         client.list_dinner_recipes(),
         target_date,
         settings,
-        used={d["recipe_id"] for d in others},
+        used={d["recipe_id"] for d in others} | in_span,
         recent=_recent_ids(history, week_start, settings),
         rng=rng,
         exclude=frozenset({current.get("recipe_id")}),

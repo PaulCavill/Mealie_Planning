@@ -130,6 +130,13 @@ def get_settings() -> Settings:
 
 # --- errors ------------------------------------------------------------------
 
+def small_int(value) -> int | None:
+    """A non-negative whole number from form or query text, or None.
+    `str.isdigit()` alone accepts characters such as '²' that int() refuses."""
+    text = str(value or "").strip()
+    return int(text) if text.isascii() and text.isdigit() and len(text) <= 9 else None
+
+
 def describe_error(exc: BaseException) -> str:
     """A message for the person using the app; never a stack trace."""
     if isinstance(exc, ConfigMissing):

@@ -27,12 +27,19 @@ def _parse_date(value: str | None) -> date:
 
 
 def _parse_effort(value: str | None) -> int | None:
-    return int(value) if value and value.isdigit() and 1 <= int(value) <= 5 else None
+    number = deps.small_int(value)
+    return number if number is not None and 1 <= number <= 5 else None
 
 
 def _week_floor(settings: Settings, day: date) -> date:
     """The configured week start day on or before `day`."""
     return day - timedelta(days=(day.weekday() - settings.week_start_day) % 7)
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
 
 
 def _plan_summary(settings: Settings) -> str:
@@ -41,8 +48,7 @@ def _plan_summary(settings: Settings) -> str:
     days = ", ".join(WEEKDAY_NAMES[d][:3] for d in ordered)
     weeks = f"{settings.weeks_to_plan} week{'s' if settings.weeks_to_plan != 1 else ''}"
     if settings.weeks_to_plan > 1 and settings.week_interval > 1:
-        ordinal = {2: "2nd", 3: "3rd"}.get(settings.week_interval, f"{settings.week_interval}th")
-        weeks += f", every {ordinal} week"
+        weeks += f", every {_ordinal(settings.week_interval)} week"
     return f"Dinners for {days} · {weeks}"
 
 

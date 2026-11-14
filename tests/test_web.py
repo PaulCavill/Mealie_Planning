@@ -861,3 +861,161 @@ def test_image_page_search_failure_and_setting_an_image(web, mealie, monkeypatch
     inward = web.post(f"/images/{recipe['slug']}/set", data={"url": f"{mealie.base_url}/api/app/about"}, headers=HTMX)
     assert "private or local network" in inward.text and "Image updated" not in inward.text
     assert web.get("/images/no-such-recipe").status_code == 502
+
+
+# --- second review ---------------------------------------------------------------
+
+@pytest.mark.parametrize("host, allowed", [
+    ("192.168.1.20:8080", True), ("[fd00::5]:8080", True), ("truenas:8080", True), ("localhost", True),
+    ("nas.local", True), ("planner.home.arpa:8080", True),
+    ("evil.example:8080", False), ("192.168.1.20.evil.example", False), ("", False),
+])
+def test_without_a_login_only_local_names_are_answered(web, host, allowed):
+    """DNS rebinding: a public domain re-pointed at this machine shares an origin with the app."""
+    headers = {"Host": host, "Origin": f"http://{host}"}  # same origin, as a rebound page's requests are
+    page = web.get("/settings", headers=headers)
+    post = web.post("/recipes/nope/effort", data={"effort": "3"}, headers=headers)
+    if allowed:
+        assert page.status_code == 200 and post.status_code != 403
+    else:
+        assert page.status_code == 403 and post.status_code == 403
+        assert "ALLOWED_HOSTS" in page.text and "Traceback" not in page.text
+    assert web.get("/healthz", headers={"Host": host}).status_code == 200  # the container's health check
+
+
+def test_other_names_can_be_allowed_or_covered_by_a_login(web, monkeypatch):
+    headers = {"Host": "dinner.example.com"}
+    assert web.get("/settings", headers=headers).status_code == 403
+    monkeypatch.setenv("ALLOWED_HOSTS", "other.example, Dinner.Example.com:443")
+    assert web.get("/settings", headers=headers).status_code == 200
+    monkeypatch.setenv("ALLOWED_HOSTS", "*")
+    assert web.get("/settings", headers={"Host": "anything.example"}).status_code == 200
+    monkeypatch.delenv("ALLOWED_HOSTS")
+    monkeypatch.setenv("APP_PASSWORD", "s3cret")  # a rebound origin has no session cookie, so the login is enough
+    assert web.get("/settings", headers=headers, follow_redirects=False).status_code == 303
+
+
+@pytest.mark.parametrize("cookie", ["²GARBAGE.x", "9999999999.é", "９９９９９９９９９９.abc", "9" * 400 + ".x", ".", "x"])
+def test_a_malformed_session_cookie_is_just_not_a_session(web, monkeypatch, cookie):
+    from web import auth
+
+    monkeypatch.setenv("APP_PASSWORD", "s3cret")
+    assert auth.valid_session(cookie) is False
+    assert auth.valid_session(auth.new_session()) is True
+
+
+@pytest.mark.parametrize("number", ["²", "３", "1" * 40, "-1", "x"])
+def test_odd_numbers_in_forms_are_refused_not_crashed_on(web, mealie, monkeypatch, number):
+    from web import deps
+
+    slug = mealie.list_recipes()[0]["slug"]
+    assert web.post(f"/recipes/{slug}/effort", data={"effort": number}, headers=HTMX).status_code < 500
+    assert web.get("/recipes", params={"effort": number}).status_code == 200
+    monkeypatch.setattr(deps, "ai_client_factory", lambda: FakeAnthropic())
+    assert web.post("/generate", data={"count": number}).status_code == 400
+    assert deps.small_int(number) is None and deps.small_int(" 12 ") == 12
+
+
+def test_week_interval_ordinals():
+    from web.routes.plan import _ordinal
+
+    assert [_ordinal(n) for n in (1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 31, 42, 52)] == [
+        "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "31st", "42nd", "52nd"]
+
+
+def test_the_session_secret_is_read_once_not_on_every_request(web, monkeypatch):
+    from core import db
+    from web import auth
+
+    monkeypatch.setenv("APP_PASSWORD", "s3cret")
+    token = auth.new_session()
+    opened = []
+    real_connect = db.connect
+    monkeypatch.setattr(db, "connect", lambda *a, **k: opened.append(1) or real_connect(*a, **k))
+    for _ in range(50):
+        assert auth.valid_session(token)
+    assert opened == []
+
+
+def test_a_job_whose_ending_could_not_be_recorded_does_not_block_the_next_one(env, monkeypatch):
+    import sqlite3
+
+    from web import jobs
+
+    monkeypatch.setattr(jobs, "_FINISH_RETRY_SECONDS", 0)
+    attempts = []
+
+    def locked(*args, **kwargs):
+        attempts.append(1)
+        raise sqlite3.OperationalError("database is locked")
+
+    real_finish_connect = jobs._connect
+    first = jobs.submit("parse", "First", lambda ctx: monkeypatch.setattr(jobs, "_connect", locked) or {"ok": True})
+    jobs._threads[first].join(10)
+    monkeypatch.setattr(jobs, "_connect", real_finish_connect)
+    assert len(attempts) == jobs._FINISH_ATTEMPTS  # it did retry before giving up
+
+    stuck = jobs.get(first)  # looking at it notices nothing is running it any more
+    assert stuck["status"] == "failed" and "could not record" in stuck["error"]
+    second = jobs.submit("parse", "Second", lambda ctx: {"ok": True})  # no JobBusy
+    assert jobs.wait(second)["status"] == "done"
+
+
+def test_a_brief_lock_while_recording_a_jobs_ending_is_retried(env, monkeypatch):
+    import sqlite3
+
+    from web import jobs
+
+    monkeypatch.setattr(jobs, "_FINISH_RETRY_SECONDS", 0)
+    real_connect, failures = jobs._connect, [1, 1]
+
+    def flaky(*args, **kwargs):
+        if failures and threading.current_thread().name.startswith("job-"):
+            failures.pop()
+            raise sqlite3.OperationalError("database is locked")
+        return real_connect(*args, **kwargs)
+
+    def work(ctx):
+        monkeypatch.setattr(jobs, "_connect", flaky)
+        return {"ok": True}
+
+    job_id = jobs.submit("parse", "Flaky", work)
+    job = jobs.wait(job_id)
+    assert job["status"] == "done" and job["result"] == {"ok": True} and failures == []
+
+
+def test_leftovers_are_cleared_once_an_unwritable_data_folder_is_fixed(env, tmp_path, monkeypatch):
+    """If the folder was not writable at startup, the startup clean-up must not be skipped for good."""
+    from contextlib import closing
+
+    from web import app as web_app, jobs, previews
+
+    good = tmp_path / "later"
+    monkeypatch.setenv("DATA_DIR", str(good))
+    with closing(jobs._connect()) as conn, conn:
+        conn.execute("INSERT INTO web_jobs (id, kind, title, status, created_at) VALUES ('old', 'parse', 'Old', 'running', 1)")
+    preview_id = previews.create({"weeks": []})
+    with closing(previews._connect()) as conn, conn:
+        conn.execute("UPDATE web_plan_previews SET status = 'saving' WHERE id = ?", (preview_id,))
+    web_app._tidied.discard(str(good / "planner.db"))
+
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("")
+    monkeypatch.setenv("DATA_DIR", str(blocker / "data"))
+    with TestClient(web_app.app) as client:  # starts while storage is broken
+        assert client.get("/").status_code == 503
+        monkeypatch.setenv("DATA_DIR", str(good))  # "fixed"
+        assert client.get("/maintenance").status_code == 200
+        assert jobs.get("old")["status"] == "failed"
+        with closing(previews._connect()) as conn:
+            assert conn.execute("SELECT status FROM web_plan_previews WHERE id = ?", (preview_id,)).fetchone()[0] == "draft"
+
+
+def test_the_data_folder_does_not_depend_on_the_current_directory(tmp_path, monkeypatch):
+    from core import db
+
+    monkeypatch.delenv("DATA_DIR", raising=False)
+    here = db.db_path()
+    monkeypatch.chdir(tmp_path)
+    assert db.db_path() == here and here.is_absolute()
+    assert here.parent == Path(__file__).resolve().parent.parent / "data"

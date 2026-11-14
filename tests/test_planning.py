@@ -402,3 +402,20 @@ def test_shopping_list_scales_kept_dinners_for_the_household(mealie):
               if i["shoppingListId"] == week["shopping_list_id"]}
     assert scales["roast"] == SETTINGS.scale_factor(2) == 1.75  # not 1.0
     assert {v for k, v in scales.items() if k != "roast"} == {0.88}
+
+
+def test_dinners_on_days_the_plan_does_not_fill_are_not_proposed_again(library):
+    # A Thursday added by hand in the first week, and a Friday in the week between the two planned ones.
+    for i in range(12, 18):  # enough spare recipes that a re-roll always has an unused one
+        library.add_recipe(f"Recipe {i}")
+    thursday = library.recipes["recipe-03"]
+    friday = library.recipes["recipe-07"]
+    library.add_plan(START + timedelta(days=5), thursday)
+    library.add_plan(START + timedelta(days=13), friday)
+    taken = {thursday["id"], friday["id"]}
+    for seed in range(30):
+        p = preview(library, seed)
+        assert not taken & {d["recipe_id"] for d in days_of(p)}
+        target = date.fromisoformat(p["weeks"][0]["days"][0]["date"])
+        rerolled = planning.reroll_day(library, SETTINGS, p, target, rng=random.Random(seed))
+        assert not taken & {d["recipe_id"] for d in days_of(rerolled)}

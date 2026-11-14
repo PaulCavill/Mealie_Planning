@@ -139,7 +139,7 @@ def start_generate(request: Request, count: str = Form(""), restrictions: str = 
     if not deps.anthropic_ready():
         return _page(request, 400, form=form,
                      errors={"generate": "ANTHROPIC_API_KEY is not set, so recipes can't be generated."})
-    if not count.strip().isdigit() or not 1 <= int(count) <= 50:
+    if not 1 <= (deps.small_int(count) or 0) <= 50:
         return _page(request, 400, form=form, errors={"generate": "Choose how many recipes: a number from 1 to 50."})
     return start("generate", f"Generate {int(count)} recipe{'s' if int(count) != 1 else ''}", _run_generate,
                  {"count": int(count), "restrictions": restrictions})
@@ -152,7 +152,7 @@ async def start_import(request: Request, job_id: str):
     if not job or job["kind"] != "generate" or job["status"] != "done":
         raise GenerationError("Those generated recipes are no longer available. Generate a new batch.")
     recipes = job["result"]["recipes"]
-    chosen = sorted({int(i) for i in form.getlist("pick") if i.isdigit() and int(i) < len(recipes)})
+    chosen = sorted({n for n in map(deps.small_int, form.getlist("pick")) if n is not None and n < len(recipes)})
     if not chosen:
         raise GenerationError("Tick at least one recipe to import.")
     selected = [recipes[i] for i in chosen]

@@ -29,7 +29,8 @@ This release has been run against the bundled fake Mealie only. The Docker image
 - **Optional login.** Set `APP_PASSWORD` to require a password on every page. Sessions last 30 days.
 - **Docker packaging**: a `Dockerfile` (runs as user and group id 568, data in `/data`, health check on `/healthz`), a `docker-compose.yml` (`PUID`/`PGID` change the user), and a GitHub workflow that runs the tests and publishes an amd64 and arm64 image to `ghcr.io/paulcavill/mealie_planning` on pushes to `main` and on `v*` tags.
 - A "can't save anything" page, and an unhealthy `/healthz`, when the `/data` folder is not writable, naming the folder and the user id to fix.
-- **New environment variables**: `APP_PASSWORD`, `DATA_DIR`, `MEALIE_TIMEOUT`, and in the compose file `TZ`, `PUID` and `PGID`.
+- **Local names only without a login.** With no `APP_PASSWORD`, the app answers only when opened by an IP address or a local name, which stops another website reaching it by pointing a domain at the NAS (DNS rebinding). `ALLOWED_HOSTS` lists extra names.
+- **New environment variables**: `APP_PASSWORD`, `ALLOWED_HOSTS`, `DATA_DIR`, `MEALIE_TIMEOUT`, and in the compose file `TZ`, `PUID` and `PGID`.
 - `plan --dry-run` in the CLI: prints the plan that would be created, including what `--override-plan` would delete, and writes nothing.
 - A set-up page that says which of `MEALIE_BASE_URL` and `MEALIE_TOKEN` is missing, and plain-language error messages when Mealie is unreachable or rejects the token.
 - Recipe images are fetched through the app, so they show even when the browser cannot reach Mealie directly.
@@ -57,6 +58,9 @@ This release has been run against the bundled fake Mealie only. The Docker image
 ### Fixed
 
 - Recipe generation tells Claude about every recipe generated earlier in the same run. Before, the exclusion list was cut to its first 30 names, so with a library of 30 or more recipes later batches could repeat earlier ones. Up to 150 library names are now included as well.
+- A failed batch during recipe generation no longer discards the recipes from earlier batches; they are kept and the job log says why it stopped. An answer cut off by the length limit, a rejected API key and an unknown model name each get their own message.
+- The planner no longer proposes a recipe that is already in Mealie on another day of the weeks being planned, including days the plan does not fill (a Thursday added by hand, for example).
+- The CLI finds its settings wherever it is run from: without `DATA_DIR`, the data folder is the one next to the code, not `./data` in the current directory.
 - Requests to Mealie now time out (5 seconds to connect in the web app, 60 seconds to answer by default) instead of hanging forever when Mealie is down.
 - Pantry-staple removal can no longer touch items on other shopping lists if Mealie ignores the list filter.
 - Tag, food and unit lookups during a bulk import or parse are read once per job instead of once per ingredient.

@@ -78,6 +78,7 @@ You need Docker, a running Mealie, and a Mealie API token. An Anthropic API key 
          MEALIE_TOKEN: ${MEALIE_TOKEN}              # Mealie > Profile > API Tokens
          ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}  # only needed for recipe generation
          APP_PASSWORD: ${APP_PASSWORD:-}            # optional: set to require a login
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}          # optional: domain names the app may be opened by
          TZ: ${TZ:-Pacific/Auckland}
        volumes:
          # Settings, plan previews and job history. Create the folder yourself
@@ -117,7 +118,8 @@ You need Docker, a running Mealie, and a Mealie API token. An Anthropic API key 
 | `APP_PASSWORD` | No | If set, every page needs this password. If empty, anyone who can reach port 8080 can use the app. |
 | `PUID`, `PGID` | No | Read by the compose file, not by the app: the user and group id the container runs as. Default `568:568`. That user must be able to write the folder mounted at `/data`. |
 | `TZ` | No | Time zone, used to decide what "today" is. The compose file defaults it to `Pacific/Auckland`. |
-| `DATA_DIR` | No | Where the app keeps its SQLite file, `planner.db`. The image sets it to `/data`; leave it alone and mount a volume at `/data`. Outside Docker it defaults to `./data`. |
+| `DATA_DIR` | No | Where the app keeps its SQLite file, `planner.db`. The image sets it to `/data`; leave it alone and mount a volume at `/data`. Outside Docker it defaults to the `data` folder next to the code, wherever you run it from. |
+| `ALLOWED_HOSTS` | No | Only matters when `APP_PASSWORD` is empty. Extra names the app may be opened by, comma separated, for example `planner.example.com`. IP addresses, single-word names such as `truenas`, and names ending in `.local`, `.lan`, `.home`, `.internal` or `.home.arpa` always work. `*` allows any name. |
 | `MEALIE_TIMEOUT` | No | Seconds to wait for Mealie to answer. Default `60`. Not in the compose file; add it under `environment:` if you need it. |
 | `MEALIE_USERNAME`, `MEALIE_PASSWORD` | No | Used to sign in to Mealie only when `MEALIE_TOKEN` is not set. A token is the better choice. Not in the compose file. |
 
@@ -133,6 +135,7 @@ One file, `planner.db`: your settings, unsaved plan previews, the background job
 
 - `APP_PASSWORD` is a single shared password, not user accounts. A login lasts 30 days, and changing the password logs everyone out.
 - The app serves plain HTTP. If you expose it beyond your home network, put it behind a reverse proxy with HTTPS.
+- With no password set, the app only answers when it is opened by an IP address or a local name (see `ALLOWED_HOSTS` above). This stops a website from reaching the app by pointing its own domain at your NAS. If you open the app by a full domain name, set `APP_PASSWORD` or add the name to `ALLOWED_HOSTS`.
 - The app refuses form posts that a browser says came from another site, whether or not a login is set. A reverse proxy must pass the original `Host` header, or set `X-Forwarded-Host`, or every button will be refused.
 
 ## Running on TrueNAS
@@ -349,6 +352,8 @@ Mealie_Planning/
 **"Could not reach Mealie" or "Mealie rejected the API token".** Open **Settings**; the Connection card shows the address in use and what went wrong. The address must work from inside the container, so `localhost` will not reach a Mealie on the host.
 
 **"The planner can't save anything".** The folder mounted at `/data` is not writable by the user the container runs as. The page names the folder and the user id. `chown` the folder or dataset to that id (`568:568` by default), or set `PUID` and `PGID` to the folder's owner, then restart. While this lasts, `/healthz` answers 503 and Docker shows the container as unhealthy.
+
+**"This app does not answer to the name ...".** You opened the app by a domain name and no password is set. Set `APP_PASSWORD`, or add the name to `ALLOWED_HOSTS`, and restart.
 
 **"That request did not come from this app's own page".** Usually a reverse proxy that changes the `Host` header. Pass the original host through, or set `X-Forwarded-Host`.
 

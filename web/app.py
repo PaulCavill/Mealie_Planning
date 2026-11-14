@@ -24,6 +24,7 @@ from env_loader import load_dotenv
 
 load_dotenv()  # local runs; in Docker the variables come from the container environment
 
+from core import db  # noqa: E402
 from core.errors import CoreError  # noqa: E402
 from . import auth, deps, jobs, previews  # noqa: E402
 from .routes import generate, images, maintenance, plan, recipes, settings  # noqa: E402
@@ -41,11 +42,31 @@ async def lifespan(app: FastAPI):
     if problem:
         log.error("%s %s", problem, deps.STORAGE_FIX)
     else:
+        _tidy_after_start()
+    yield
+
+
+_tidied: set[str] = set()  # database files whose leftovers from a previous run are cleared
+
+
+def _tidy_after_start() -> None:
+    """Once per database file, as soon as it is usable: fail jobs and release
+    plan previews that a previous run left half-done. Normally that is at
+    startup; if the data folder was not writable then, it is the first
+    request after it has been fixed."""
+    key = str(db.db_path())
+    if key in _tidied:
+        return
+    _tidied.add(key)
+    try:
         interrupted = jobs.mark_interrupted()
         previews.reset_stuck()
-        if interrupted:
-            log.warning("%d background job(s) were interrupted by the restart", interrupted)
-    yield
+    except Exception:
+        _tidied.discard(key)
+        log.warning("could not clear leftovers from the previous run", exc_info=True)
+        return
+    if interrupted:
+        log.warning("%d background job(s) were interrupted by the restart", interrupted)
 
 
 app = FastAPI(title="Mealie Planner", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -69,6 +90,11 @@ def _storage_notice(request: Request, problem: str):
 @app.middleware("http")
 async def guard(request: Request, call_next):
     path = request.url.path
+    if not deps.auth_enabled() and path != "/healthz" and not auth.trusted_host(request):
+        host = request.headers.get("host", "")
+        return _problem(request, f"This app does not answer to the name '{host}'. Open it by its IP address or "
+                                 "local name, or add that name to ALLOWED_HOSTS (or set APP_PASSWORD) and restart.",
+                        403)
     # Cross-site request forgery: checked whether or not a login is required,
     # since a page on another site can reach this app through the user's browser.
     if request.method not in _SAFE_METHODS:
@@ -79,6 +105,7 @@ async def guard(request: Request, call_next):
         problem = deps.storage_problem()
         if problem:
             return _storage_notice(request, problem)
+        _tidy_after_start()
     if not deps.auth_enabled() or request.method == "OPTIONS":
         return await call_next(request)
     if auth.is_open_path(path) or auth.logged_in(request):

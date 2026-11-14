@@ -339,3 +339,103 @@ def test_summarize_exposes_the_image_version_token():
     assert recipes.summarize({"id": "1", "name": "Soup", "image": "ab12"})["image"] == "ab12"
     assert recipes.summarize({"id": "1", "name": "Soup", "image": None})["image"] is None
     assert recipes.summarize({"id": "1", "name": "Soup"})["image"] is None
+
+
+# --- generation failures ---------------------------------------------------------
+
+def test_a_failed_later_batch_keeps_the_recipes_already_generated():
+    ai, messages = FakeClaude(), []
+    good = ai.messages.create
+
+    def create(**kwargs):
+        if len(ai.requests) >= 2:
+            ai.requests.append(kwargs)
+            return SimpleNamespace(content=[SimpleNamespace(text='[{"name": "Cut o')], stop_reason="max_tokens")
+        return good(**kwargs)
+
+    ai.messages = SimpleNamespace(create=create)
+    out = generate.generate_recipes(Settings(), [], count=15, progress=messages.append, ai_client=ai)
+    assert len(out) == 10 and len(ai.requests) == 3  # two good batches kept, no fourth request
+    assert messages[-1].startswith("Stopped early, keeping the 10 recipes generated so far.")
+    assert "Recipes per request" in messages[-1]
+
+
+def test_a_cut_off_first_batch_says_to_lower_the_batch_size():
+    cut = SimpleNamespace(messages=SimpleNamespace(create=lambda **k: SimpleNamespace(
+        content=[SimpleNamespace(text="[")], stop_reason="max_tokens")))
+    with pytest.raises(GenerationError, match="cut off.*Recipes per request"):
+        generate.generate_recipes(Settings(), [], count=1, ai_client=cut)
+    empty = SimpleNamespace(messages=SimpleNamespace(create=lambda **k: SimpleNamespace(content=[], stop_reason="end_turn")))
+    with pytest.raises(GenerationError, match="empty answer"):
+        generate.generate_recipes(Settings(), [], count=1, ai_client=empty)
+
+
+@pytest.mark.parametrize("class_name, expected", [
+    ("AuthenticationError", "rejected the API key"),
+    ("NotFoundError", "does not know the model 'claude-typo'"),
+    ("RateLimitError", "rate limiting"),
+    ("APIConnectionError", "Could not reach Claude"),
+    ("InternalServerError", r"returned an error \(529\)"),
+    ("RuntimeError", r"failed \(RuntimeError\)"),
+])
+def test_claude_api_errors_are_explained(class_name, expected):
+    # Shaped like the SDK's hierarchy: every HTTP error derives from APIStatusError.
+    status_error = type("APIStatusError", (Exception,), {"status_code": 529})
+    base = Exception if class_name in ("APIConnectionError", "RuntimeError") else status_error
+    error = type(class_name, (base,), {})
+
+    def create(**kwargs):
+        raise error("boom")
+
+    settings = Settings(claude_model="claude-typo")
+    with pytest.raises(GenerationError, match=expected):
+        generate.generate_recipes(settings, [], count=1, ai_client=SimpleNamespace(messages=SimpleNamespace(create=create)))
+
+
+# --- the download deadline -------------------------------------------------------
+
+class TricklingRaw:
+    """A body that arrives a few bytes at a time, each read taking 9 'seconds'."""
+
+    def __init__(self, clock):
+        self.clock, self.reads, self.connection = clock, 0, None
+
+    def read1(self, amount, decode_content=True):
+        self.reads += 1
+        self.clock["now"] += 9
+        return b"xx"
+
+
+def test_a_trickling_server_cannot_hold_a_download_past_the_deadline(internet, monkeypatch):
+    clock = {"now": 0.0}
+    monkeypatch.setattr(images.time, "monotonic", lambda: clock["now"])
+    internet.pages = {"https://slow/drip.png": dict(body=b"")}
+    real_get = images.requests.get
+
+    def get(url, **kwargs):
+        response = real_get(url, **kwargs)
+        response.raw = TricklingRaw(clock)
+        return response
+
+    monkeypatch.setattr(images.requests, "get", get)
+    with pytest.raises(ImageDownloadError, match="too long"):
+        images._download_image("https://slow/drip.png")
+    assert internet.responses[-1].raw.reads <= images.DOWNLOAD_SECONDS // 9 + 1  # stopped at ~30 s, not after 64 KB
+    assert internet.responses[-1].closed
+
+
+def test_slow_redirects_count_towards_the_same_deadline(internet, monkeypatch):
+    clock = {"now": 0.0}
+    monkeypatch.setattr(images.time, "monotonic", lambda: clock["now"])
+    internet.pages = {f"https://hop/{i}": dict(status=302, location=f"https://hop/{i + 1}") for i in range(6)}
+    real_get = images.requests.get
+
+    def get(url, **kwargs):
+        assert kwargs["timeout"][1] <= images.DOWNLOAD_SECONDS - clock["now"] + 0.001
+        clock["now"] += 12  # each hop is slow
+        return real_get(url, **kwargs)
+
+    monkeypatch.setattr(images.requests, "get", get)
+    with pytest.raises(ImageDownloadError, match="too long"):
+        images._download_image("https://hop/0")
+    assert len(internet.fetched) == 3  # 0 s, 12 s, 24 s; the fourth hop would start at 36 s

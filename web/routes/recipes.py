@@ -57,6 +57,7 @@ def set_dinner(request: Request, slug: str, value: str = Form("")):
 
 @router.post("/recipes/{slug}/effort")
 def set_effort(request: Request, slug: str, effort: str = Form("")):
-    level = int(effort) if effort.isdigit() and 1 <= int(effort) <= 5 else None
+    level = deps.small_int(effort)
+    level = level if level is not None and 1 <= level <= 5 else None
     recipe = recipe_ops.set_effort(deps.get_client(), slug, level)
     return deps.render(request, "recipes/_row.html", {"r": recipe, "saved": True})

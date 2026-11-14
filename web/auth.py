@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import time
@@ -32,10 +33,20 @@ def is_open_path(path: str) -> bool:
     return path in OPEN_PATHS or path.startswith(OPEN_PREFIXES)
 
 
+_secrets: dict[str, bytes] = {}  # per database file; read once, then kept in memory
+
+
 def _secret() -> bytes:
     """The signing secret, created on first use. If the database can't be
     written this raises: the app then shows its storage notice instead of
     quietly issuing sessions that would die with the process."""
+    key = str(db.db_path())
+    if key not in _secrets:
+        _secrets[key] = _load_secret()
+    return _secrets[key]
+
+
+def _load_secret() -> bytes:
     with closing(db.connect()) as conn, conn:
         conn.execute("CREATE TABLE IF NOT EXISTS web_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         # Two first requests at once: only one insert wins, and both read that one back.
@@ -63,9 +74,10 @@ def valid_session(token: str | None) -> bool:
     if not token or "." not in token:
         return False
     expiry, _, signature = token.partition(".")
-    if not expiry.isdigit() or int(expiry) < time.time():
+    # isascii: str.isdigit() also accepts characters such as '²' that int() refuses.
+    if not (expiry.isascii() and expiry.isdigit() and len(expiry) <= 12) or int(expiry) < time.time():
         return False
-    return hmac.compare_digest(signature, _sign(expiry))
+    return hmac.compare_digest(signature.encode(), _sign(expiry).encode())
 
 
 def logged_in(request: Request) -> bool:
@@ -109,6 +121,47 @@ def cross_origin(request: Request) -> bool:
         return True
     source = _source_host(request)
     return source is not None and source not in _own_hosts(request)
+
+
+_LOCAL_SUFFIXES = (".local", ".lan", ".home", ".internal", ".home.arpa", ".localdomain", ".localhost")
+
+
+def _hostname(host_header: str) -> str:
+    """The name part of a Host header: no port, no IPv6 brackets, lower case."""
+    host = host_header.strip().lower()
+    if host.startswith("["):
+        return host[1:].split("]", 1)[0]
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+def allowed_hosts() -> set[str]:
+    """Extra names from ALLOWED_HOSTS (comma separated) this app may be reached by."""
+    return {_hostname(h) for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()}
+
+
+def trusted_host(request: Request) -> bool:
+    """True if the name the browser used for this app can only be a local one.
+
+    Without a login, the only thing separating another website's script from
+    this app is the browser's same-origin rule, and DNS rebinding gets round
+    it: a public domain is re-pointed at this machine's address, after which
+    its page and this app share an origin. Such a request still carries the
+    attacker's domain in Host, so it is refused unless the name is an IP
+    address, a bare or local-only name, or listed in ALLOWED_HOSTS. With a
+    login the attacker's origin has no session cookie, so this is not needed.
+    """
+    name = _hostname(request.headers.get("host", ""))
+    if not name:
+        return False
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    if "." not in name or name == "localhost" or name.endswith(_LOCAL_SUFFIXES):
+        return True
+    extra = allowed_hosts()
+    return "*" in extra or name in extra
 
 
 def safe_next(target: str | None) -> str:

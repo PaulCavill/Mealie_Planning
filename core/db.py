@@ -1,4 +1,7 @@
-"""SQLite storage at $DATA_DIR/planner.db (DATA_DIR defaults to ./data).
+"""SQLite storage at $DATA_DIR/planner.db.
+
+DATA_DIR defaults to the `data` folder next to the code, not to the current
+directory, so the CLI finds the same settings wherever it is run from.
 
 Each module creates the tables it owns with CREATE TABLE IF NOT EXISTS;
 `settings` belongs to core.settings.
@@ -11,7 +14,7 @@ DB_FILENAME = "planner.db"
 
 
 def data_dir() -> Path:
-    return Path(os.environ.get("DATA_DIR") or "./data")
+    return Path(os.environ.get("DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
 
 
 def db_path() -> Path:
