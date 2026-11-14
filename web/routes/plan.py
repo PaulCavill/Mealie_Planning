@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import requests
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
@@ -215,7 +216,12 @@ def show_preview(request: Request, preview_id: str):
     if record["status"] == "saved":
         return deps.render(request, "plan/saved.html", {"active": "plan", "result": record["result"],
                                                         "shopping_list": record["shopping_list"]})
-    return deps.render(request, "plan/preview.html", _preview_context(record))
+    context = _preview_context(record)
+    try:
+        context["replaced_lists"] = planning.shopping_lists_to_replace(deps.get_client(), record["data"])
+    except (requests.RequestException, deps.ConfigMissing):
+        context["replaced_lists"] = []  # Mealie is unreachable; saving will say so
+    return deps.render(request, "plan/preview.html", context)
 
 
 def _after_change(request: Request, preview_id: str, preview: dict, changed: date):

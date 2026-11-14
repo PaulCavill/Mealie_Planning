@@ -125,12 +125,17 @@ def cmd_plan(args):
         print("Dry run — nothing was written to Mealie.")
         return
 
-    result = planning.commit_plan(
-        client, settings, preview, create_shopping_list=args.shopping_list, progress=_indented("    "),
-    )
+    try:
+        result = planning.commit_plan(
+            client, settings, preview, create_shopping_list=args.shopping_list, progress=_indented("    "),
+        )
+    except CoreError as e:
+        _fail(f"Error: {e}")
     for warning in result["warnings"]:
         print(f"    Warning: {warning['message']}")
     _print_plans(settings, result["weeks"], "entries")
+    if result["failed"]:
+        print(f"  {result['created']} dinner(s) added, {len(result['failed'])} could not be added (see the warnings above).")
 
 
 def cmd_recipes(args):
@@ -320,7 +325,7 @@ def cmd_parse_ingredients(args):
         print("No recipes found.")
         return
 
-    print(f"\nDone: {summary['parsed']} parsed, {summary['failed']} failed.")
+    print(f"\nDone: {summary['parsed']} parsed, {summary['unchanged']} already up to date, {summary['failed']} failed.")
     failed = [r for r in summary["results"] if r["status"] == "failed"]
     if failed:
         print("\nFailed recipes (check Mealie UI and parse manually if needed):")
@@ -330,6 +335,7 @@ def cmd_parse_ingredients(args):
 
 def cmd_replace_image(args):
     from core import images, recipes as recipe_ops
+    from core.errors import ImageDownloadError
 
     client = _client()
     recipes = recipe_ops.list_recipes(client)
@@ -348,7 +354,11 @@ def cmd_replace_image(args):
 
     def replace(recipe: dict) -> bool:
         if image_url:
-            return images.set_image_from_url(client, recipe["slug"], image_url)
+            try:
+                return images.set_image_from_url(client, recipe["slug"], image_url)
+            except ImageDownloadError as e:
+                print(f"    {e}")
+                return False
         return images.auto_set_image(client, recipe["slug"], recipe["name"])
 
     # When a specific URL is given and search narrows to one recipe, skip prompt

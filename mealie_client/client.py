@@ -59,6 +59,11 @@ class MealieClient(RecipesMixin, MealPlansMixin, ShoppingMixin, FoodsMixin):
         resp.raise_for_status()
         return resp.json()
 
+    def patch(self, path: str, json: dict) -> dict:
+        resp = self.session.patch(f"{self.base_url}{path}", json=json, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
     def put_multipart(self, path: str, files: dict) -> dict:
         resp = self.session.put(f"{self.base_url}{path}", files=files, timeout=self.timeout)
         resp.raise_for_status()

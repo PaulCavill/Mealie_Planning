@@ -3,11 +3,13 @@
     <div class="row-title">{{ r.name }}</div>
     {% if r.status == "parsed" %}
     <div class="row-meta"><span class="pill pill-done">Parsed</span></div>
+    {% elif r.status == "unchanged" %}
+    <div class="row-meta"><span class="pill pill-done">Nothing to parse</span></div>
     {% else %}
     <div class="row-warning">{{ r.error }}</div>
     {% endif %}
   </div>
-  {% if r.status != "parsed" %}
+  {% if r.status == "failed" %}
   <div class="row-actions">
     <button type="button" class="btn btn-small" hx-post="/maintenance/parse/{{ r.slug }}" hx-target="closest li" hx-swap="outerHTML">Retry</button>
   </div>

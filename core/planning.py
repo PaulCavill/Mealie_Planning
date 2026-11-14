@@ -351,6 +351,22 @@ def remove_pantry_staples(client: MealieClient, settings: Settings, list_id: str
     return removed
 
 
+def shopping_list_name(week_start: date) -> str:
+    return f"Week of {week_start.strftime('%d %b %Y')}"
+
+
+def shopping_lists_to_replace(client: MealieClient, preview: dict) -> list[str]:
+    """Names of shopping lists already in Mealie that saving this preview with
+    "create shopping lists" would delete and rebuild - losing anything ticked
+    off or added to them by hand."""
+    try:
+        wanted = [shopping_list_name(date.fromisoformat(week["week_start"])) for week in preview["weeks"]]
+    except (KeyError, TypeError, ValueError) as e:
+        raise PlanningError("That plan preview is not valid.") from e
+    existing = {sl.get("name") for sl in client.list_shopping_lists()}
+    return [name for name in wanted if name in existing]
+
+
 def _build_shopping_list(
     client: MealieClient,
     settings: Settings,
@@ -362,7 +378,7 @@ def _build_shopping_list(
     """`kept_scales` maps a date to the scale factor of the dinner already in
     Mealie on that day; kept days carry no scale_factor of their own."""
     kept_scales = kept_scales or {}
-    name = f"Week of {week_start.strftime('%d %b %Y')}"
+    name = shopping_list_name(week_start)
     for existing in client.list_shopping_lists():
         if existing.get("name") == name:
             client.delete_shopping_list(existing["id"])
@@ -382,6 +398,10 @@ def _build_shopping_list(
     return {"shopping_list_id": list_id, "shopping_list_name": name, "staples_removed": removed}
 
 
+def _reason(error: Exception) -> str:
+    return str(error).strip() or type(error).__name__
+
+
 def commit_plan(
     client: MealieClient,
     settings: Settings,
@@ -389,45 +409,52 @@ def commit_plan(
     create_shopping_list: bool = False,
     progress: Progress | None = None,
 ) -> dict:
-    """Write a preview to Mealie: delete overridden entries, add the proposed
-    dinners and optionally build one shopping list per week.
+    """Write a preview to Mealie, one day at a time: add the proposed dinner,
+    then (for an override) delete the dinner it replaces - so a day never ends
+    up empty because a later step failed. Optionally builds one shopping list
+    per week from what was actually written.
 
-    A proposed day that has gained a dinner in Mealie since the preview was
-    made is left alone and reported in "warnings". Returns:
+    A day that fails is reported and the rest carry on. A proposed day that
+    has gained a dinner in Mealie since the preview was made is left alone.
+    Returns:
 
         {"weeks": [{"week_start", "entries": [<day> + "entry_id"],
                     "shopping_list_id", "shopping_list_name", "staples_removed"}],
-         "created": n, "deleted": [<entry>], "warnings": [{"date", "message"}]}
+         "created": n,                       # dinners added
+         "failed": [<day> + "error"],        # proposed dinners Mealie refused
+         "deleted": [<entry>],               # overridden dinners removed
+         "warnings": [{"date", "message"}]}
 
-    The shopping list keys are present only when a list was created.
+    "entries" are the dinners now in Mealie for that week (added or kept); a
+    failed day appears there only if its previous dinner is still in place.
+    The shopping list keys are present only when a list was created. Raises
+    PlanningError if every single dinner was refused.
     """
     days = _preview_days(preview)
     if not days:
         raise PlanningError("That plan preview has no days in it.")
     warnings = []
 
-    deleted = []
+    to_delete: dict[str, list[dict]] = {}
     for entry in preview.get("deletions", []):
-        try:
-            client.delete_meal_plan_entry(entry["entry_id"])
-        except Exception as e:
-            warnings.append({"date": entry.get("date"),
-                             "message": f"Could not delete {entry.get('recipe_name')} from {entry.get('date')}: {e}"})
-            continue
-        deleted.append(entry)
-        if progress:
-            progress(f"Deleted existing {entry.get('recipe_name')} from {entry.get('date')}")
+        to_delete.setdefault(entry.get("date"), []).append(entry)
+    doomed_ids = {e.get("entry_id") for entries in to_delete.values() for e in entries}
 
     # Re-read the plan so a stale preview can't double-book a day.
     dates = [date.fromisoformat(d["date"]) for d in days]
-    current_by_date = {e["date"]: e for e in _dinners(client, min(dates), max(dates))}
+    in_mealie = _dinners(client, min(dates), max(dates))
+    present_ids = {e.get("id") for e in in_mealie}
+    doomed_by_date = {e["date"]: e for e in in_mealie if e.get("id") in doomed_ids}
+    current_by_date = {e["date"]: e for e in in_mealie if e.get("id") not in doomed_ids}
     # Kept dinners are scaled for the household too, from their recipe's servings.
     kept_scales = {
         day_iso: settings.scale_factor(e["recipe"].get("recipeServings"))
-        for day_iso, e in current_by_date.items() if e.get("recipe")
+        for day_iso, e in {**doomed_by_date, **current_by_date}.items() if e.get("recipe")
     }
 
     created = 0
+    failed = []
+    deleted = []
     weeks = []
     for week in preview["weeks"]:
         week_start = date.fromisoformat(week["week_start"])
@@ -439,21 +466,63 @@ def commit_plan(
             current = current_by_date.get(day["date"])
             if day.get("type") != "recipe":
                 entries.append(dict(day))
-            elif current:
+                continue
+            if current:
                 kept = _existing_day(day_date, current, settings)
                 entries.append(kept)
                 warnings.append({"date": day["date"],
                                  "message": f"{day['day']} already has a dinner planned ({kept['recipe_name']}); left as is."})
-            else:
-                entry = client.add_meal_plan_entry(plan_date=day_date, entry_type=DINNER, recipe_id=day["recipe_id"])
-                entries.append({**day, "entry_id": entry.get("id")})
-                created += 1
-        result = {"week_start": week["week_start"], "entries": entries}
-        if create_shopping_list:
-            result.update(_build_shopping_list(client, settings, week_start, entries, progress, kept_scales))
-        weeks.append(result)
+                continue
 
-    return {"weeks": weeks, "created": created, "deleted": deleted, "warnings": warnings}
+            try:
+                entry = client.add_meal_plan_entry(plan_date=day_date, entry_type=DINNER, recipe_id=day["recipe_id"])
+            except Exception as e:
+                failed.append({**day, "error": _reason(e)})
+                message = f"Could not add {day.get('recipe_name')} on {day['day']} {day['date']}: {_reason(e)}"
+                still_there = doomed_by_date.get(day["date"])
+                if still_there:
+                    kept = _existing_day(day_date, still_there, settings)
+                    entries.append(kept)
+                    message += f" The dinner already planned ({kept['recipe_name']}) was left in place."
+                warnings.append({"date": day["date"], "message": message})
+                continue
+            entries.append({**day, "entry_id": entry.get("id")})
+            created += 1
+
+            # Only now that the new dinner exists is the one it replaces removed.
+            for old in to_delete.get(day["date"], []):
+                if old.get("entry_id") not in present_ids:
+                    continue  # already gone from Mealie
+                try:
+                    client.delete_meal_plan_entry(old["entry_id"])
+                except Exception as e:
+                    warnings.append({"date": old.get("date"),
+                                     "message": f"Could not delete {old.get('recipe_name')} from {old.get('date')}, "
+                                                f"so that day now has two dinners: {_reason(e)}"})
+                    continue
+                deleted.append(old)
+                if progress:
+                    progress(f"Deleted existing {old.get('recipe_name')} from {old.get('date')}")
+        weeks.append({"week_start": week["week_start"], "entries": entries})
+
+    if failed and not created:
+        raise PlanningError(
+            f"Nothing was saved: Mealie refused {'the dinner' if len(failed) == 1 else f'all {len(failed)} dinners'} "
+            f"({failed[0]['error']}). The plan in Mealie is unchanged; this preview is still here to try again."
+        )
+
+    if create_shopping_list:
+        for result in weeks:
+            week_start = date.fromisoformat(result["week_start"])
+            try:
+                result.update(_build_shopping_list(client, settings, week_start, result["entries"], progress, kept_scales))
+            except Exception as e:
+                warnings.append({"date": None,
+                                 "message": f"The shopping list for the week of {week_start.strftime('%d %b %Y')} "
+                                            f"could not be built ({_reason(e)}). The dinners are saved; check the "
+                                            "list in Mealie, or generate a plan for that week again to rebuild it."})
+
+    return {"weeks": weeks, "created": created, "failed": failed, "deleted": deleted, "warnings": warnings}
 
 
 # --- replacing one day -----------------------------------------------------
@@ -525,13 +594,31 @@ def replacement_options(
 def replace_day(client: MealieClient, target_date: date, recipe_id: str) -> dict:
     """Put `recipe_id` on `target_date` as dinner, replacing the current dinner if any.
 
+    The new dinner is added first and the old one removed only once that has
+    worked, so a failure never leaves the day empty. Raises PlanningError if
+    `recipe_id` is not a dinner recipe.
+
     Returns {"date", "replaced": <entry> or None, "entry_id", "recipe_id"}.
     """
+    if not any(r["id"] == recipe_id for r in client.list_dinner_recipes()):
+        raise PlanningError("That recipe is not in the dinner library.")
     dinners = _dinners(client, target_date, target_date)
     replaced = _entry_view(dinners[0]) if dinners else None
-    if dinners:
-        client.delete_meal_plan_entry(dinners[0]["id"])
     entry = client.add_meal_plan_entry(plan_date=target_date, entry_type=DINNER, recipe_id=recipe_id)
+    if dinners:
+        try:
+            client.delete_meal_plan_entry(dinners[0]["id"])
+        except Exception as e:
+            try:  # put things back as they were rather than leave two dinners
+                client.delete_meal_plan_entry(entry.get("id"))
+            except Exception:
+                raise PlanningError(
+                    f"The new dinner was added, but {replaced['recipe_name']} could not be removed ({_reason(e)}). "
+                    "That day now has two dinners; remove one in Mealie."
+                ) from e
+            raise PlanningError(
+                f"{replaced['recipe_name']} could not be removed ({_reason(e)}), so the day was left as it was."
+            ) from e
     return {
         "date": target_date.isoformat(),
         "replaced": replaced,

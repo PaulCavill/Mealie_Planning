@@ -1,23 +1,36 @@
 {% extends "base.html" %}
 {% from "_macros.html" import effort_badge, thumb %}
-{% block title %}Plan saved{% endblock %}
+{% set failed = result.failed | default([]) %}
+{% block title %}{{ "Plan partly saved" if failed else "Plan saved" }}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <p class="crumb"><a href="/">Plan</a> /</p>
-    <h1>Plan saved</h1>
+    <h1>{{ "Plan partly saved" if failed else "Plan saved" }}</h1>
   </div>
 </div>
 
-<div class="alert alert-ok" role="status">
-  <strong>{{ result.created }} dinner{{ "" if result.created == 1 else "s" }} added to Mealie.</strong>
+<div class="alert alert-{{ 'warn' if failed else 'ok' }}" role="status">
+  <strong>{{ result.created }} dinner{{ "" if result.created == 1 else "s" }} added to Mealie{% if failed %}, {{ failed | length }} could not be added{% endif %}.</strong>
   {% if result.deleted %}{{ result.deleted | length }} existing dinner{{ "" if result.deleted | length == 1 else "s" }} replaced.{% endif %}
 </div>
 
-{% if result.warnings %}
+{% if failed %}
+<div class="alert alert-error" role="alert">
+  <strong>Not saved — Mealie refused {{ "this dinner" if failed | length == 1 else "these dinners" }}:</strong>
+  <ul class="plain">
+    {% for d in failed %}<li>{{ d.date | day_long }} — {{ d.recipe_name }} <span class="muted">({{ d.error }})</span></li>{% endfor %}
+  </ul>
+  Add {{ "it" if failed | length == 1 else "them" }} from the Plan page, or generate a plan for the same dates again: days that are already planned are kept.
+</div>
+{% endif %}
+
+{% set failed_dates = failed | map(attribute="date") | list %}
+{% set notes = result.warnings | rejectattr("date", "in", failed_dates) | list %}
+{% if notes %}
 <div class="alert alert-warn" role="status">
   <strong>Worth knowing</strong>
-  <ul class="plain">{% for w in result.warnings %}<li>{{ w.message }}</li>{% endfor %}</ul>
+  <ul class="plain">{% for w in notes %}<li>{{ w.message }}</li>{% endfor %}</ul>
 </div>
 {% endif %}
 

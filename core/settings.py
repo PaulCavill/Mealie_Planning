@@ -167,7 +167,7 @@ class Settings:
         check(1 <= self.suggest_count <= 50, "suggest_count must be between 1 and 50")
         try:
             self.render_system_prompt("none")
-        except (KeyError, IndexError, ValueError) as e:
+        except Exception as e:  # str.format can also raise AttributeError, TypeError, ... ({household.x}, {servings[0]})
             problems.append(
                 "system_prompt may only use the placeholders {household}, {servings} and {existing}; "
                 f"write literal braces as {{{{ and }}}} ({type(e).__name__}: {e})"

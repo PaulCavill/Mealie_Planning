@@ -1,4 +1,4 @@
 from .client import MealieClient
-from .recipes import IngredientSaveError
+from .recipes import IngredientParseError, IngredientSaveError
 
-__all__ = ["MealieClient", "IngredientSaveError"]
+__all__ = ["MealieClient", "IngredientParseError", "IngredientSaveError"]

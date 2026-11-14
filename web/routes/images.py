@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, Request
 
 from core import images as image_ops, recipes as recipe_ops
-from core.errors import ImageSearchError
+from core.errors import ImageDownloadError, ImageSearchError
 from .. import deps
 from .recipes import search
 
@@ -63,11 +63,14 @@ def image_set(request: Request, slug: str, url: str = Form("")):
     url = url.strip()
     if not url.lower().startswith(("http://", "https://")):
         message = ("error", "Paste the full address of an image, starting with http:// or https://.")
-    elif image_ops.set_image_from_url(client, slug, url):
-        message = ("ok", "Image updated.")
     else:
-        message = ("error", "That image could not be used: the download failed, it isn't an image, "
-                            "or Mealie refused it. Try another one.")
+        try:
+            saved = image_ops.set_image_from_url(client, slug, url)
+        except ImageDownloadError as e:
+            message = ("error", f"That image could not be used. {e} Try another one.")
+        else:
+            message = ("ok", "Image updated.") if saved else (
+                "error", "That image could not be used: Mealie refused it. Try another one.")
     recipe = _detail(client, slug)
     context = {"active": "images", "recipe": recipe, "message": message}
     if deps.is_htmx(request):

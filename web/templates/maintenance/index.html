@@ -12,7 +12,8 @@
 <section class="card" aria-labelledby="parse-h">
   <h2 id="parse-h">Parse all ingredients</h2>
   <p>Turns ingredient text like “500 g chicken thighs, diced” into an amount, unit and food for every recipe,
-    using Mealie's parser. Shopping lists can only combine and scale ingredients that have been parsed.</p>
+    using Mealie's parser. Shopping lists can only combine and scale ingredients that have been parsed.
+    Only lines that are still plain text are parsed; ingredients that already have a food are left exactly as they are.</p>
   {% if running %}
   <div class="alert alert-info" role="status">
     <strong>Parsing is running.</strong> <a href="/jobs/{{ running.id }}">Watch its progress</a>

@@ -1,15 +1,22 @@
-{% set failures = job.result.results | selectattr("status", "equalto", "failed") | list %}
+{% set r = job.result %}
+{% set failures = r.results | selectattr("status", "equalto", "failed") | list %}
+{% set unchanged = r.unchanged | default(0) %}
 <section class="card">
   <h2>Results</h2>
-  {% if not job.result.results %}
+  {% if not r.results %}
   <div class="empty small"><p>There are no recipes in Mealie yet, so there was nothing to parse.</p></div>
-  {% elif not failures %}
-  <div class="alert alert-ok" role="status"><strong>All {{ job.result.parsed }} recipes parsed.</strong> No failures.</div>
   {% else %}
-  <div class="alert alert-warn" role="status"><strong>{{ job.result.parsed }} parsed, {{ job.result.failed }} failed.</strong> Retry the failures below, or open the recipe in Mealie and parse it there.</div>
+  <div class="alert alert-{{ 'warn' if failures else 'ok' }}" role="status">
+    <strong>{{ r.parsed }} recipe{{ "" if r.parsed == 1 else "s" }} parsed{% if unchanged %}, {{ unchanged }} already up to date{% endif %}{% if failures %}, {{ r.failed }} failed{% endif %}.</strong>
+    {% if failures %}Retry the failures below, or open the recipe in Mealie and parse it there.
+    {% elif not r.parsed %}Every ingredient already has an amount and food, so nothing was changed.
+    {% else %}No failures.{% endif %}
+  </div>
+  {% if failures %}
   <ul class="rows compact">
     {% for r in failures %}{% include "jobs/_parse_failure.html" %}{% endfor %}
   </ul>
+  {% endif %}
   {% endif %}
   <div class="actions"><a class="btn" href="/maintenance">Back to Maintenance</a></div>
 </section>

@@ -2,12 +2,13 @@
 
 Environment: MEALIE_BASE_URL, MEALIE_TOKEN (required), ANTHROPIC_API_KEY
 (recipe generation), APP_PASSWORD (turns the login on), DATA_DIR (SQLite file
-with settings, plan previews and job history).
+with settings, plan previews and job history; must be writable).
 """
 from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 import time
 from contextlib import asynccontextmanager
 from urllib.parse import quote
@@ -15,7 +16,7 @@ from urllib.parse import quote
 import requests
 from fastapi import FastAPI, Form, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -36,13 +37,14 @@ _IMAGE_FILES = {"min": "min-original.webp", "tiny": "tiny-original.webp", "origi
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    try:
+    problem = deps.storage_problem(recheck=True)
+    if problem:
+        log.error("%s %s", problem, deps.STORAGE_FIX)
+    else:
         interrupted = jobs.mark_interrupted()
         previews.reset_stuck()
         if interrupted:
             log.warning("%d background job(s) were interrupted by the restart", interrupted)
-    except Exception:  # e.g. DATA_DIR not writable; pages will say so when they need it
-        log.exception("could not open the planner database")
     yield
 
 
@@ -54,14 +56,31 @@ for module in (plan, recipes, generate, images, maintenance, settings):
 
 # --- login and CSRF ------------------------------------------------------------
 
+_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+
+
+def _storage_notice(request: Request, problem: str):
+    if deps.is_htmx(request):
+        return deps.toast(request, f"{problem} {deps.STORAGE_FIX}")
+    return deps.render(request, "storage.html", {"active": None, "problem": problem, "fix": deps.STORAGE_FIX},
+                       status_code=503)
+
+
 @app.middleware("http")
-async def require_login(request: Request, call_next):
+async def guard(request: Request, call_next):
+    path = request.url.path
+    # Cross-site request forgery: checked whether or not a login is required,
+    # since a page on another site can reach this app through the user's browser.
+    if request.method not in _SAFE_METHODS:
+        if auth.cross_origin(request) or (deps.auth_enabled() and not auth.same_origin(request)):
+            return _problem(request, "That request did not come from this app's own page, so it was refused. "
+                                     "Reload the page and try again.", 403)
+    if not auth.is_open_path(path) or path == "/login":
+        problem = deps.storage_problem()
+        if problem:
+            return _storage_notice(request, problem)
     if not deps.auth_enabled() or request.method == "OPTIONS":
         return await call_next(request)
-    path = request.url.path
-    if request.method not in ("GET", "HEAD") and not auth.same_origin(request):
-        return _problem(request, "That request did not come from this app's own page, so it was refused. "
-                                 "Reload the page and try again.", 403)
     if auth.is_open_path(path) or auth.logged_in(request):
         return await call_next(request)
     if deps.is_htmx(request):
@@ -104,6 +123,9 @@ def logout():
 
 @app.get("/healthz")
 def healthz():
+    problem = deps.storage_problem(recheck=True)
+    if problem:
+        return JSONResponse({"status": "error", "reason": f"{problem} {deps.STORAGE_FIX}"}, status_code=503)
     return {"status": "ok"}
 
 
@@ -186,5 +208,10 @@ async def bad_form(request: Request, exc: RequestValidationError):
 
 @app.exception_handler(Exception)
 async def unexpected(request: Request, exc: Exception):
+    if isinstance(exc, (sqlite3.Error, OSError)):  # did the data folder stop being writable?
+        problem = deps.storage_problem(recheck=True)
+        if problem:
+            log.error("%s %s", problem, deps.STORAGE_FIX)
+            return _storage_notice(request, problem)
     log.exception("unhandled error on %s %s", request.method, request.url.path)
     return _problem(request, deps.describe_error(exc), 500, title="Something went wrong")

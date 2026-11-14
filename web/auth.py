@@ -24,9 +24,6 @@ SESSION_SECONDS = 30 * 24 * 3600
 OPEN_PATHS = ("/healthz", "/login", "/favicon.ico")
 OPEN_PREFIXES = ("/static/",)
 
-_fallback_secret = secrets.token_bytes(32)  # used only if the database can't be written
-
-
 def password() -> str:
     return os.environ.get("APP_PASSWORD") or ""
 
@@ -36,17 +33,16 @@ def is_open_path(path: str) -> bool:
 
 
 def _secret() -> bytes:
-    try:
-        with closing(db.connect()) as conn, conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS web_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-            row = conn.execute("SELECT value FROM web_meta WHERE key = 'session_secret'").fetchone()
-            if row:
-                return bytes.fromhex(row["value"])
-            secret = secrets.token_bytes(32)
-            conn.execute("INSERT INTO web_meta (key, value) VALUES ('session_secret', ?)", (secret.hex(),))
-            return secret
-    except Exception:
-        return _fallback_secret
+    """The signing secret, created on first use. If the database can't be
+    written this raises: the app then shows its storage notice instead of
+    quietly issuing sessions that would die with the process."""
+    with closing(db.connect()) as conn, conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS web_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        # Two first requests at once: only one insert wins, and both read that one back.
+        conn.execute("INSERT OR IGNORE INTO web_meta (key, value) VALUES ('session_secret', ?)",
+                     (secrets.token_bytes(32).hex(),))
+        row = conn.execute("SELECT value FROM web_meta WHERE key = 'session_secret'").fetchone()
+    return bytes.fromhex(row["value"])
 
 
 def _sign(expiry: str) -> str:
@@ -76,21 +72,43 @@ def logged_in(request: Request) -> bool:
     return valid_session(request.cookies.get(COOKIE))
 
 
-def same_origin(request: Request) -> bool:
-    """True if a state-changing request came from one of our own pages: its
-    Origin (or, failing that, Referer) names the host the browser asked for."""
+def _source_host(request: Request) -> str | None:
+    """Host of the page a request came from, per its Origin (or, failing that,
+    Referer) header. None if the request carries neither; "" if the header is
+    there but names no usable host (e.g. `Origin: null`)."""
     source = request.headers.get("origin") or request.headers.get("referer")
-    if not source or source == "null":
-        return False
+    if not source:
+        return None
     try:
-        netloc = urlsplit(source).netloc.lower()
+        return urlsplit(source).netloc.lower()
     except ValueError:
-        return False
+        return ""
+
+
+def _own_hosts(request: Request) -> set[str]:
     hosts = {request.headers.get("host", "").lower()}
     forwarded = request.headers.get("x-forwarded-host", "")
     hosts.update(h.strip().lower() for h in forwarded.split(",") if h.strip())
     hosts.discard("")
-    return bool(netloc) and netloc in hosts
+    return hosts
+
+
+def same_origin(request: Request) -> bool:
+    """True if a state-changing request came from one of our own pages: its
+    Origin (or, failing that, Referer) names the host the browser asked for."""
+    source = _source_host(request)
+    return bool(source) and source in _own_hosts(request)
+
+
+def cross_origin(request: Request) -> bool:
+    """True if a request says it came from somewhere else: an Origin/Referer
+    that is not this app's host, or a browser's `Sec-Fetch-Site: cross-site`.
+    A request with none of these headers (curl, a script) is not a browser
+    being tricked by another site, so it is not cross-origin."""
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        return True
+    source = _source_host(request)
+    return source is not None and source not in _own_hosts(request)
 
 
 def safe_next(target: str | None) -> str:

@@ -20,3 +20,7 @@ class GenerationError(CoreError):
 
 class ImageSearchError(CoreError):
     pass
+
+
+class ImageDownloadError(CoreError):
+    """An image address was refused or could not be downloaded."""

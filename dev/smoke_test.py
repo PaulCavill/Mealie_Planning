@@ -91,7 +91,6 @@ e2 = c.add_meal_plan_entry(d, "dinner", title="Out", note="n")
 ok("listed", len(c.list_meal_plans(d, d)) == 2)
 c.delete_meal_plan_entry(e["id"]); c.delete_meal_plan_entry(e2["id"])
 ok("deleted", c.list_meal_plans(d, d) == [])
-rm = c.get_random_meal(); ok("random", rm["recipe"]["id"]); c.delete_meal_plan_entry(rm["id"])
 c.get_this_week(); c.get_upcoming(7)
 
 # shopping

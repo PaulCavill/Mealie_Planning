@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import re
 
+import requests
+
 if TYPE_CHECKING:
     from .client import MealieClient
 
@@ -47,8 +49,33 @@ def parse_ingredient_note(note: str) -> dict:
 
 
 
+class IngredientParseError(RuntimeError):
+    """Mealie's ingredient parser could not be used for a recipe."""
+
+
 class IngredientSaveError(RuntimeError):
     """Mealie refused to save a recipe after its ingredients were parsed."""
+
+
+def tag_key(tag) -> str:
+    """What identifies a tag: its slug, as Mealie's own recipe filter uses
+    (falling back to the lower-cased name). Accepts a tag dict or a name."""
+    if isinstance(tag, dict):
+        return str(tag.get("slug") or tag.get("name") or "").strip().lower()
+    return str(tag or "").strip().lower()
+
+
+EFFORT_TAG_KEYS = frozenset(f"effort-{i}" for i in range(1, 6))
+
+
+def _tag_ref(tag: dict) -> dict:
+    return {"id": tag["id"], "name": tag["name"], "slug": tag.get("slug")}
+
+
+def _ingredient_source_text(ingredient: dict) -> str:
+    """The line the parser should read: what was originally typed if Mealie
+    kept it, otherwise the note."""
+    return str(ingredient.get("originalText") or "").strip() or str(ingredient.get("note") or "").strip()
 
 
 class RecipesMixin:
@@ -80,27 +107,41 @@ class RecipesMixin:
         slug = result if isinstance(result, str) else result.get("slug", result)
         return self.get_recipe(slug)
 
+    def update_recipe_fields(self: "MealieClient", slug: str, fields: dict) -> None:
+        """Change only `fields` of a recipe (PATCH), so that whatever else was
+        edited in the meantime - by a person in Mealie or by another job here -
+        is not overwritten with a stale copy.
+
+        A Mealie without PATCH support (405) gets a fresh GET + full PUT.
+        """
+        try:
+            self.patch(f"/api/recipes/{slug}", json=fields)
+        except requests.HTTPError as e:
+            if e.response is None or e.response.status_code != 405:
+                raise
+            recipe = self.get_recipe(slug)
+            recipe.update(fields)
+            self.put(f"/api/recipes/{slug}", json=recipe)
+
     def add_tag(self: "MealieClient", slug: str, tag_name: str) -> dict:
         """Add a tag to a recipe by name, creating the tag if needed."""
         tag = self._get_or_create_tag(tag_name)
         recipe = self.get_recipe(slug)
         existing_tags = recipe.get("tags") or []
-        if any(t["name"] == tag_name for t in existing_tags):
+        wanted = {tag_key(tag_name), tag_key(tag)}
+        if any(tag_key(t) in wanted or t.get("id") == tag["id"] for t in existing_tags):
             return recipe
-        existing_tags.append({"id": tag["id"], "name": tag["name"], "slug": tag["slug"]})
-        recipe["tags"] = existing_tags
-        self.put(f"/api/recipes/{slug}", json=recipe)
+        self.update_recipe_fields(slug, {"tags": existing_tags + [_tag_ref(tag)]})
         return self.get_recipe(slug)
 
     def remove_tag(self: "MealieClient", slug: str, tag_name: str) -> dict:
         """Remove a tag from a recipe by name. No-op if the recipe doesn't have it."""
         recipe = self.get_recipe(slug)
         existing_tags = recipe.get("tags") or []
-        kept_tags = [t for t in existing_tags if t["name"] != tag_name]
+        kept_tags = [t for t in existing_tags if tag_key(t) != tag_key(tag_name)]
         if len(kept_tags) == len(existing_tags):
             return recipe
-        recipe["tags"] = kept_tags
-        self.put(f"/api/recipes/{slug}", json=recipe)
+        self.update_recipe_fields(slug, {"tags": kept_tags})
         return self.get_recipe(slug)
 
     def set_effort_tag(self: "MealieClient", slug: str, effort: int | None) -> None:
@@ -108,17 +149,27 @@ class RecipesMixin:
 
         Passing None just removes the existing effort tags.
         """
-        effort_names = {f"effort-{i}" for i in range(1, 6)}
         tag = self._get_or_create_tag(f"effort-{effort}") if effort is not None else None
         recipe = self.get_recipe(slug)
-        kept_tags = [t for t in (recipe.get("tags") or []) if t["name"] not in effort_names]
+        existing_tags = recipe.get("tags") or []
+        kept_tags = [t for t in existing_tags if tag_key(t) not in EFFORT_TAG_KEYS]
         if tag:
-            kept_tags.append({"id": tag["id"], "name": tag["name"], "slug": tag["slug"]})
-        recipe["tags"] = kept_tags
-        self.put(f"/api/recipes/{slug}", json=recipe)
+            kept_tags.append(_tag_ref(tag))
+        if [t.get("id") for t in kept_tags] == [t.get("id") for t in existing_tags]:
+            return
+        self.update_recipe_fields(slug, {"tags": kept_tags})
 
     def _get_or_create_tag(self: "MealieClient", name: str) -> dict:
-        return self._get_or_create_named("/api/organizers/tags", name, {"name": name})
+        # A tag called "Dinner" has the slug "dinner" and is the same tag to Mealie.
+        path = "/api/organizers/tags"
+        index = self._name_index(path)
+        if name.lower() in index:
+            return index[name.lower()]
+        for tag in index.values():
+            if tag_key(tag) == tag_key(name):
+                return tag
+        index[name.lower()] = self.post(path, json={"name": name})
+        return index[name.lower()]
 
     def upload_recipe_image(self: "MealieClient", slug: str, content: bytes, content_type: str) -> None:
         """Set a recipe's cover image from raw image bytes."""
@@ -135,93 +186,94 @@ class RecipesMixin:
         data = self.get("/api/recipes", search=query, perPage=20)
         return data.get("items", [])
 
+    def _existing_food_or_unit(self: "MealieClient", parsed, create) -> dict | None:
+        """The parser's food/unit as a row that exists in Mealie (created if new)."""
+        if not isinstance(parsed, dict):
+            return None
+        if parsed.get("id"):
+            return parsed
+        name = str(parsed.get("name") or "").strip()
+        return create(name) if name else None
+
     def update_recipe_ingredients(self: "MealieClient", slug: str) -> dict:
-        """Parse and populate ingredient quantity/unit/food fields using Mealie's NLP parser.
+        """Parse a recipe's free-text ingredient lines into quantity/unit/food
+        with Mealie's NLP parser.
 
-        Steps:
-        1. Parse ingredient notes using Mealie's NLP parser
-        2. For each parsed food with id=null, create it in the database
-        3. Set quantity, unit, food (with valid id), and prep note on ingredient
-        4. PUT recipe back
+        Only lines that have no food yet are parsed; ingredients that are
+        already structured are left exactly as they are (their note is just
+        preparation text such as "halved"). Returns
 
-        Skips ingredients with empty notes (they can't be parsed).
+            {"name": <recipe name>, "parsed": n, "status": "parsed" | "unchanged"}
+
+        "unchanged" means there was nothing to do and nothing was written.
+        Raises IngredientParseError if the parser can't be used and
+        IngredientSaveError if Mealie refuses the result.
+
+        The recipe is re-read just before saving and only its ingredient list
+        is sent, so a tag changed while the parser was running is not undone.
         """
         recipe = self.get_recipe(slug)
-        ingredients = recipe.get("recipeIngredient", [])
+        name = recipe.get("name") or slug
+        ingredients = recipe.get("recipeIngredient") or []
+        todo = [(i, _ingredient_source_text(ing)) for i, ing in enumerate(ingredients) if not ing.get("food")]
+        todo = [(i, text) for i, text in todo if text]
+        unchanged = {"name": name, "parsed": 0, "status": "unchanged"}
+        if not todo:
+            return unchanged
 
-        # Separate ingredients into parseable and non-parseable
-        parseable_indices = []
-        parseable_notes = []
-
-        for i, ing in enumerate(ingredients):
-            note = ing.get("note", "").strip()
-            if note:  # Only parse non-empty notes
-                parseable_indices.append(i)
-                parseable_notes.append(note)
-
-        if not parseable_notes:
-            return recipe  # Nothing to parse
-
-        # Parse all non-empty ingredients at once using Mealie's NLP parser
         try:
-            parse_results = self.post(
-                "/api/parser/ingredients",
-                json={"parser": "nlp", "ingredients": parseable_notes}
-            )
-            # Parser returns a list of {input, confidence, ingredient} objects
-            parsed_ings = [r.get("ingredient", {}) for r in (parse_results if isinstance(parse_results, list) else [])]
-        except Exception:
-            return recipe  # Return unchanged if parsing fails
+            answer = self.post("/api/parser/ingredients",
+                               json={"parser": "nlp", "ingredients": [text for _, text in todo]})
+        except Exception as e:
+            raise IngredientParseError(f"Mealie's ingredient parser failed for '{name}' ({slug}): {e}") from e
+        if not isinstance(answer, list) or len(answer) != len(todo):
+            raise IngredientParseError(
+                f"Mealie's ingredient parser gave an unexpected answer for '{name}' ({slug}); nothing was changed.")
 
-        # Update only the parseable ingredients with their parsed data
-        for idx, parsed_ing in zip(parseable_indices, parsed_ings):
-            if not parsed_ing:
+        # Work out every change (creating new foods/units) before touching the recipe.
+        changes = []
+        for (index, text), item in zip(todo, answer):
+            parsed = item.get("ingredient") if isinstance(item, dict) else None
+            if not isinstance(parsed, dict):
                 continue
+            food = self._existing_food_or_unit(parsed.get("food"), self.create_or_get_food)
+            if not food:
+                continue  # the parser found no food in this line: leave it as text
+            changes.append({
+                "index": index, "text": text, "reference": ingredients[index].get("referenceId"),
+                "fields": {
+                    "quantity": parsed.get("quantity") or 0,
+                    "unit": self._existing_food_or_unit(parsed.get("unit"), self.create_or_get_unit),
+                    "food": food,
+                    "note": parsed.get("note") or "",
+                    "originalText": text,
+                },
+            })
+        if not changes:
+            return unchanged
 
-            orig_ing = ingredients[idx]
-
-            # Set quantity from parser
-            orig_ing["quantity"] = parsed_ing.get("quantity", 0)
-
-            # Handle unit: if parser returned a unit with id=null, create it first
-            unit_obj = parsed_ing.get("unit")
-            if unit_obj and isinstance(unit_obj, dict):
-                unit_name = unit_obj.get("name", "")
-                unit_id = unit_obj.get("id")
-
-                # If unit has no id, create it
-                if unit_name and not unit_id:
-                    created_unit = self.create_or_get_unit(unit_name)
-                    orig_ing["unit"] = created_unit
-                else:
-                    # Unit already exists, use as-is
-                    orig_ing["unit"] = unit_obj
+        # Apply them to the recipe as it is *now*, not as it was before the parser ran.
+        fresh = self.get_recipe(slug).get("recipeIngredient") or []
+        by_reference = {ing.get("referenceId"): ing for ing in fresh if ing.get("referenceId")}
+        applied = 0
+        for change in changes:
+            if change["reference"]:
+                target = by_reference.get(change["reference"])
             else:
-                orig_ing["unit"] = unit_obj
+                target = fresh[change["index"]] if change["index"] < len(fresh) else None
+            # Skip a line that was removed, rewritten or parsed by someone else meanwhile.
+            if target is None or target.get("food") or _ingredient_source_text(target) != change["text"]:
+                continue
+            target.update(change["fields"])
+            applied += 1
+        if not applied:
+            return unchanged
 
-            # Handle food: if parser returned a food with id=null, create it first
-            food_obj = parsed_ing.get("food")
-            if food_obj and isinstance(food_obj, dict):
-                food_name = food_obj.get("name", "")
-                food_id = food_obj.get("id")
-
-                # If food has no id, create it
-                if food_name and not food_id:
-                    created_food = self.create_or_get_food(food_name)
-                    orig_ing["food"] = created_food
-                else:
-                    # Food already exists or is incomplete, use as-is
-                    orig_ing["food"] = food_obj
-
-            # Set note to just the prep instructions (parser separates quantity/unit/food/note)
-            orig_ing["note"] = parsed_ing.get("note", "")
-
-        # PUT the updated recipe back
         try:
-            self.put(f"/api/recipes/{slug}", json=recipe)
+            self.update_recipe_fields(slug, {"recipeIngredient": fresh})
         except Exception as e:
             raise IngredientSaveError(
-                f"Parsed the ingredients for '{recipe.get('name')}' ({slug}) but Mealie rejected the save: {e}. "
+                f"Parsed the ingredients for '{name}' ({slug}) but Mealie rejected the save: {e}. "
                 "Check the recipe in the Mealie UI and parse it there if needed."
             ) from e
-        return recipe
+        return {"name": name, "parsed": applied, "status": "parsed"}

@@ -14,10 +14,15 @@ COPY mealie_client ./mealie_client
 COPY core ./core
 COPY web ./web
 
-RUN useradd --uid 568 --create-home app \
+# 568:568 is the built-in `apps` user and group on TrueNAS. The app needs no
+# home directory and nothing but /data to be writable, so it also runs as any
+# other uid:gid (docker-compose `user:`) as long as that user can write /data.
+RUN groupadd --gid 568 app \
+    && useradd --uid 568 --gid 568 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin app \
     && mkdir -p /data \
-    && chown app:app /data
-USER app
+    && chown 568:568 /data
+ENV HOME=/tmp
+USER 568:568
 
 VOLUME /data
 EXPOSE 8080

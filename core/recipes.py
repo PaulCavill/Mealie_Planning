@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Callable
 
 from mealie_client import MealieClient
+from mealie_client.recipes import tag_key
+from .errors import CoreError
 
 Progress = Callable[[str], None]
 
@@ -14,7 +16,7 @@ EFFORT_TAGS = {f"effort-{i}": i for i in range(1, 6)}
 def effort_of(recipe: dict) -> int | None:
     """Effort 1-5 from a recipe's effort-N tag, or None if unrated."""
     for tag in recipe.get("tags") or []:
-        effort = EFFORT_TAGS.get(tag.get("name", ""))
+        effort = EFFORT_TAGS.get(tag_key(tag))
         if effort:
             return effort
     return None
@@ -28,7 +30,8 @@ def summarize(recipe: dict) -> dict:
         "slug": recipe.get("slug"),
         "name": recipe.get("name"),
         "servings": recipe.get("recipeServings") or None,
-        "is_dinner": DINNER_TAG in tags,
+        # Mealie identifies a tag by its slug, so "Dinner" is the dinner tag too.
+        "is_dinner": any(tag_key(t) == DINNER_TAG for t in recipe.get("tags") or []),
         "effort": effort_of(recipe),
         "tags": tags,
         "image": recipe.get("image") or None,  # Mealie's image version token; None = no image
@@ -59,19 +62,25 @@ def set_effort(client: MealieClient, slug: str, effort: int | None) -> dict:
 
 
 def parse_ingredients(client: MealieClient, slug: str, name: str | None = None) -> dict:
-    """Parse one recipe's ingredient notes into quantity/unit/food.
+    """Parse one recipe's free-text ingredient lines into quantity/unit/food.
 
-    Returns {slug, name, status: "parsed"|"failed", error}.
+    Returns {slug, name, status, ingredients, error}. status is "parsed"
+    (`ingredients` lines were converted), "unchanged" (nothing needed parsing,
+    nothing was written) or "failed" (see `error`).
     """
     try:
-        recipe = client.update_recipe_ingredients(slug)
-        return {"slug": slug, "name": recipe.get("name") or name or slug, "status": "parsed", "error": None}
+        outcome = client.update_recipe_ingredients(slug)
     except Exception as e:
-        return {"slug": slug, "name": name or slug, "status": "failed", "error": str(e)}
+        return {"slug": slug, "name": name or slug, "status": "failed", "ingredients": 0, "error": str(e)}
+    return {"slug": slug, "name": outcome.get("name") or name or slug, "status": outcome["status"],
+            "ingredients": outcome["parsed"], "error": None}
+
+
+PARSE_MARKS = {"parsed": "✓", "unchanged": "–", "failed": "✗"}
 
 
 def parse_all_ingredients(client: MealieClient, progress: Progress | None = None) -> dict:
-    """Parse every recipe. Returns {results: [...], parsed: n, failed: n}."""
+    """Parse every recipe. Returns {results: [...], parsed: n, unchanged: n, failed: n}."""
     recipes = sorted(client.list_recipes(), key=lambda r: r["name"])
     if progress and recipes:
         progress(f"Parsing ingredients for {len(recipes)} recipes...")
@@ -81,10 +90,14 @@ def parse_all_ingredients(client: MealieClient, progress: Progress | None = None
             result = parse_ingredients(client, recipe["slug"], recipe["name"])
             results.append(result)
             if progress:
-                mark = "✓" if result["status"] == "parsed" else "✗"
-                progress(f"{i:>3}. {mark} {recipe['name']}")
-    parsed = sum(1 for r in results if r["status"] == "parsed")
-    return {"results": results, "parsed": parsed, "failed": len(results) - parsed}
+                detail = " (nothing to parse)" if result["status"] == "unchanged" else ""
+                progress(f"{i:>3}. {PARSE_MARKS[result['status']]} {recipe['name']}{detail}")
+    counts = {status: sum(1 for r in results if r["status"] == status) for status in PARSE_MARKS}
+    return {"results": results, **counts}
+
+
+class ScrapeError(CoreError):
+    pass
 
 
 def scrape_url(client: MealieClient, url: str, dry_run: bool = False) -> dict:
@@ -94,6 +107,10 @@ def scrape_url(client: MealieClient, url: str, dry_run: bool = False) -> dict:
     scraped data Mealie would import. Raises if Mealie can't scrape the URL.
     """
     recipe = client.test_scrape(url) if dry_run else client.scrape_recipe(url)
+    # Mealie answers a failed test scrape with HTTP 200 and a sentence, not an error.
+    if not isinstance(recipe, dict) or not str(recipe.get("name") or "").strip():
+        detail = f" Mealie said: {recipe.strip()[:200]}" if isinstance(recipe, str) and recipe.strip() else ""
+        raise ScrapeError(f"Mealie could not find a recipe on that page.{detail}")
     return {"url": url, "dry_run": dry_run, "recipe": recipe}
 
 

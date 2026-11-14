@@ -16,7 +16,9 @@ from .settings import Settings
 
 Progress = Callable[[str], None]
 
-MAX_EXISTING_NAMES_IN_PROMPT = 30
+# The prompt lists recipes to avoid: everything generated so far in this run
+# (always), then as many library names as fit under this cap.
+MAX_LIBRARY_NAMES_IN_PROMPT = 150
 
 
 def _valid_effort(recipe: dict) -> int | None:
@@ -40,7 +42,7 @@ def _parse_recipe_array(text: str) -> list[dict]:
 
 
 def _generate_batch(ai_client, settings: Settings, batch: int, existing: list[str], restrictions: str) -> list[dict]:
-    existing_str = ", ".join(existing[:MAX_EXISTING_NAMES_IN_PROMPT]) if existing else "none"
+    existing_str = ", ".join(existing) if existing else "none"
     user_msg = f"Generate exactly {batch} dinner recipes. Return ONLY the JSON array, no other text."
     if restrictions:
         user_msg += f" Additional restriction: {restrictions}."
@@ -83,7 +85,7 @@ def generate_recipes(
     remaining = count
     while remaining > 0:
         batch = min(remaining, settings.batch_size)
-        exclude = list(existing_names) + [r["name"] for r in recipes]
+        exclude = [r["name"] for r in recipes] + list(existing_names)[:MAX_LIBRARY_NAMES_IN_PROMPT]
         for recipe in _generate_batch(ai_client, settings, batch, exclude, restrictions):
             if recipe["name"].lower() not in seen:
                 recipes.append(recipe)

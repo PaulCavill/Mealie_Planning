@@ -30,7 +30,12 @@ class FakeMealie(MealieClient):
         self.shopping_items = []
         self.images = {}
         self.calls = []  # (method, path) of every request
-        self.fail_put_slugs = set()
+        self.fail_put_slugs = set()  # recipe slugs whose PUT/PATCH is refused
+        self.fail_plan_dates = set()  # ISO dates on which adding a meal plan entry is refused
+        self.fail_delete_ids = set()  # ids whose DELETE is refused
+        self.fail_parser = False  # the ingredient parser answers with an error
+        self.on_parse = None  # called while the parser "runs" (to simulate a concurrent edit)
+        self.parser_inputs = []  # every line sent to the parser
 
     # --- test helpers ----------------------------------------------------
 
@@ -41,19 +46,33 @@ class FakeMealie(MealieClient):
         for t in self.tags:
             if t["name"] == name:
                 return t
-        tag = {"id": self._id("tag"), "name": name, "slug": name}
+        tag = {"id": self._id("tag"), "name": name, "slug": name.lower().replace(" ", "-")}
         self.tags.append(tag)
         return tag
 
-    def add_recipe(self, name, effort=None, dinner=True, servings=4, ingredients=()):
+    def structured(self, quantity, unit, food, note=""):
+        """An ingredient Mealie has already parsed: its note is only prep text."""
+        def row(store, name):
+            found = next((x for x in store if x["name"] == name), None)
+            if found is None:
+                found = {"id": self._id("item"), "name": name, "slug": name}
+                store.append(found)
+            return dict(found)
+        return {"quantity": quantity, "unit": row(self.units, unit) if unit else None,
+                "food": row(self.foods, food), "note": note,
+                "originalText": f"{quantity} {unit or ''} {food}, {note}".strip(", "),
+                "referenceId": self._id("ref")}
+
+    def add_recipe(self, name, effort=None, dinner=True, servings=4, ingredients=(), dinner_tag="dinner"):
+        """`ingredients`: strings become note-only lines, dicts are used as given."""
         slug = name.lower().replace(" ", "-")
-        tags = [self._tag("dinner")] if dinner else []
+        tags = [self._tag(dinner_tag)] if dinner else []
         if effort:
             tags.append(self._tag(f"effort-{effort}"))
         recipe = {
             "id": self._id("recipe"), "slug": slug, "name": name, "recipeServings": servings,
             "tags": [dict(t) for t in tags],
-            "recipeIngredient": [{"note": i} for i in ingredients],
+            "recipeIngredient": [dict(i) if isinstance(i, dict) else {"note": i} for i in ingredients],
         }
         self.recipes[slug] = recipe
         return recipe
@@ -85,7 +104,8 @@ class FakeMealie(MealieClient):
         if path == "/api/recipes":
             items = list(self.recipes.values())
             if params.get("tags"):
-                items = [r for r in items if any(t["name"] == params["tags"] for t in r["tags"])]
+                # Like Mealie: the filter matches a tag's slug (or id), not its display name.
+                items = [r for r in items if any(params["tags"] in (t["slug"], t["id"]) for t in r["tags"])]
             summaries = [{k: v for k, v in r.items() if k != "recipeIngredient"} for r in items]
             return self._page(summaries, params)
         if path.startswith("/api/recipes/"):
@@ -110,6 +130,8 @@ class FakeMealie(MealieClient):
     def post(self, path, json):
         self.calls.append(("POST", path))
         if path == "/api/households/mealplans":
+            if json["date"] in self.fail_plan_dates:
+                raise RuntimeError("500 Server Error")
             recipe = next((r for r in self.recipes.values() if r["id"] == json.get("recipeId")), None)
             entry = self.add_plan(date.fromisoformat(json["date"]), recipe, json["entryType"])
             return dict(entry)
@@ -119,6 +141,11 @@ class FakeMealie(MealieClient):
             store.append(item)
             return dict(item)
         if path == "/api/parser/ingredients":
+            self.parser_inputs += json["ingredients"]
+            if self.fail_parser:
+                raise RuntimeError("500 Server Error: parser unavailable")
+            if self.on_parse:
+                self.on_parse()
             out = []
             for note in json["ingredients"]:
                 m = re.match(r"([\d.]+)\s*(\w+)\s+(.*)", note)
@@ -144,7 +171,8 @@ class FakeMealie(MealieClient):
                 for ing in recipe["recipeIngredient"]:
                     self.shopping_items.append({
                         "id": self._id("item"), "shoppingListId": m[1], "note": "",
-                        "food": {"name": ing["note"]}, "scale": req["recipeIncrementQuantity"],
+                        "food": {"name": (ing.get("food") or {}).get("name") or ing["note"]},
+                        "scale": req["recipeIncrementQuantity"],
                     })
             return {}
         raise AssertionError(f"unexpected POST {path}")
@@ -157,6 +185,14 @@ class FakeMealie(MealieClient):
         self.recipes[slug] = jsonlib.loads(jsonlib.dumps(json))
         return json
 
+    def patch(self, path, json):
+        self.calls.append(("PATCH", path))
+        slug = path.rsplit("/", 1)[1]
+        if slug in self.fail_put_slugs:
+            raise RuntimeError("500 Server Error")
+        self.recipes[slug].update(jsonlib.loads(jsonlib.dumps(json)))
+        return self.recipes[slug]
+
     def put_multipart(self, path, files):
         self.calls.append(("PUT", path))
         self.images[path.split("/")[3]] = files["image"]
@@ -165,6 +201,8 @@ class FakeMealie(MealieClient):
     def delete(self, path):
         self.calls.append(("DELETE", path))
         item_id = path.rsplit("/", 1)[1]
+        if item_id in self.fail_delete_ids:
+            raise RuntimeError("500 Server Error")
         for store in (self.mealplans, self.shopping_lists, self.shopping_items):
             for item in store:
                 if item["id"] == item_id:

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% set hide_config_banner = True %}
+{% block title %}Storage problem{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>The planner can't save anything</h1>
+  <p class="lead">{{ problem }}</p>
+  <p>{{ fix }}</p>
+  <p>With the supplied <code>docker-compose.yml</code> the app runs as user <code>568:568</code> (TrueNAS's
+    built-in <code>apps</code> user) unless <code>PUID</code> and <code>PGID</code> say otherwise. On an ordinary
+    Linux host, either run <code>chown -R 568:568 ./data</code>, or put your own ids
+    (<code>id -u</code> and <code>id -g</code>) in <code>.env</code> as <code>PUID</code> and <code>PGID</code>.</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="/">Check again</a>
+  </div>
+</section>
+{% endblock %}

@@ -15,6 +15,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from core import db
 from core.errors import CoreError
 from core.settings import Settings, WEEKDAY_NAMES, load_settings
 from mealie_client import MealieClient
@@ -86,6 +87,30 @@ def anthropic_ready() -> bool:
 
 def auth_enabled() -> bool:
     return bool(os.environ.get("APP_PASSWORD"))
+
+
+# --- storage -----------------------------------------------------------------
+
+STORAGE_FIX = ("Make that folder writable by that user (for Docker: `chown` the host folder or dataset mounted "
+               "at /data to that user id, or set PUID and PGID to the folder's owner), then restart the app.")
+
+_storage_ok_for: str | None = None  # the database path that last passed the check
+
+
+def storage_problem(recheck: bool = False) -> str | None:
+    """Why the planner database can't be used, or None when it can.
+
+    A passing check is remembered (per database path), so this costs nothing
+    on ordinary requests; a failing one is re-tested every time, so the notice
+    clears as soon as the folder is fixed.
+    """
+    global _storage_ok_for
+    path = str(db.db_path())
+    if _storage_ok_for == path and not recheck:
+        return None
+    problem = db.storage_problem()
+    _storage_ok_for = None if problem else path
+    return problem
 
 
 def get_client(read_timeout: float | None = None) -> MealieClient:
