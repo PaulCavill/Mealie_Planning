@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Log in · Mealie Planner</title>
+  <link rel="icon" href="/static/icon.svg?v={{ static_v }}" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css?v={{ static_v }}">
+</head>
+<body class="login-page">
+  <main class="login-box card">
+    <img src="/static/icon.svg?v={{ static_v }}" alt="" width="56" height="56">
+    <h1>Mealie Planner</h1>
+    <p class="muted">Enter the household password to continue.</p>
+    {% if error %}<div class="alert alert-error" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/login" class="stack">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label class="field">
+        <span class="label">Password</span>
+        <input type="password" name="password" autocomplete="current-password" required autofocus>
+      </label>
+      <button type="submit" class="btn btn-primary btn-block">Log in</button>
+    </form>
+  </main>
+</body>
+</html>

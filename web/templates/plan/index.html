@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Plan{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Dinner plan</h1>
+    <p class="muted">What's for dinner this week and the weeks ahead, straight from Mealie.</p>
+  </div>
+</div>
+
+{% if draft %}
+<div class="alert alert-info" role="status">
+  <strong>You have an unsaved plan preview</strong>
+  starting {{ draft.data.start | day_long }}.
+  <a href="/plan/preview/{{ draft.id }}">Continue with it</a>
+</div>
+{% endif %}
+
+<section class="card" aria-labelledby="gen-title">
+  <h2 id="gen-title">Generate a plan</h2>
+  <p class="muted">{{ plan_summary }}. You'll see a preview first — nothing is saved until you say so.</p>
+  <form method="post" action="/plan/preview" class="genform" data-busy>
+    <label class="field">
+      <span class="label">Start date</span>
+      <input type="date" name="start" value="{{ default_start }}" required>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="override" value="1">
+      <span><strong>Replace existing dinners</strong><small>Re-plan days that already have a dinner</small></span>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="shopping_list" value="1">
+      <span><strong>Create shopping lists</strong><small>One list per week, scaled for the household</small></span>
+    </label>
+    <button type="submit" class="btn btn-primary">Preview plan</button>
+  </form>
+</section>
+
+{% include "plan/_calendar.html" %}
+{% endblock %}

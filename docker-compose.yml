@@ -1,0 +1,27 @@
+services:
+  mealie-planner:
+    # Pull the published image, or swap this line for `build: .` to build locally.
+    image: ghcr.io/paulcavill/mealie_planning:latest
+    container_name: mealie-planner
+    restart: unless-stopped
+    # The user the app runs as. It must be able to write the folder mounted at
+    # /data below, or the app reports "data folder cannot be written" and
+    # /healthz turns unhealthy. 568:568 is TrueNAS's built-in `apps` user: give
+    # the dataset to it. On an ordinary Linux host either `chown 568:568 ./data`
+    # or set PUID / PGID in .env to your own `id -u` / `id -g`.
+    user: "${PUID:-568}:${PGID:-568}"
+    ports:
+      - "8080:8080"
+    environment:
+      MEALIE_BASE_URL: ${MEALIE_BASE_URL}        # e.g. http://mealie:9000
+      MEALIE_TOKEN: ${MEALIE_TOKEN}              # Mealie > Profile > API Tokens
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}  # only needed for recipe generation
+      APP_PASSWORD: ${APP_PASSWORD:-}            # optional: set to require a login
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}          # optional: domain names the app may be opened by
+      TZ: ${TZ:-Pacific/Auckland}
+    volumes:
+      # Settings, plan previews and job history. Create the folder yourself
+      # first (Docker would create it owned by root, which the app can't write)
+      # and make it writable by the user above. On TrueNAS, point this at a
+      # dataset, e.g. /mnt/tank/apps/mealie-planner:/data
+      - ./data:/data

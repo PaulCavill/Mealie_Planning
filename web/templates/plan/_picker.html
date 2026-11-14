@@ -1,0 +1,23 @@
+{% from "_macros.html" import icon %}
+<div class="picker">
+  <div class="modal-head">
+    <div>
+      <h2>{{ title }}</h2>
+      <p class="muted">{{ subtitle }}</p>
+    </div>
+    <button type="button" class="iconbtn" data-modal-close aria-label="Close">{{ icon("close") }}</button>
+  </div>
+  <form class="picker-filters" onsubmit="return false">
+    {% for name, value in hidden_fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    <input type="search" name="q" value="{{ q }}" placeholder="Search dinner recipes…" aria-label="Search dinner recipes" autocomplete="off"
+           hx-get="{{ search_url }}" hx-trigger="input changed delay:250ms, search" hx-target="#picker-results" hx-include="closest form">
+    <select name="effort" aria-label="Effort filter"
+            hx-get="{{ search_url }}" hx-trigger="change" hx-target="#picker-results" hx-include="closest form">
+      <option value="">Any effort</option>
+      {% for n in range(1, 6) %}<option value="{{ n }}"{% if effort == n %} selected{% endif %}>Effort ≤ {{ n }}</option>{% endfor %}
+    </select>
+  </form>
+  <div id="picker-results" class="picker-results">
+    {% include "plan/_picker_results.html" %}
+  </div>
+</div>

@@ -18,8 +18,7 @@ class MealPlansMixin:
             params["start_date"] = start_date.isoformat()
         if end_date:
             params["end_date"] = end_date.isoformat()
-        data = self.get("/api/households/mealplans", **params)
-        return data.get("items", [])
+        return self.get_all("/api/households/mealplans", **params)
 
     def get_this_week(self: "MealieClient") -> list[dict]:
         today = date.today()
@@ -54,6 +53,3 @@ class MealPlansMixin:
 
     def delete_meal_plan_entry(self: "MealieClient", item_id: str) -> None:
         self.delete(f"/api/households/mealplans/{item_id}")
-
-    def get_random_meal(self: "MealieClient") -> dict:
-        return self.post("/api/households/mealplans/random", json={})

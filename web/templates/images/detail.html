@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ recipe.name }} · Images{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="crumb"><a href="/images">Images</a> /</p>
+    <h1>{{ recipe.name }}</h1>
+  </div>
+</div>
+
+<div class="image-layout">
+  {% include "images/_current.html" %}
+
+  <section class="card" aria-labelledby="find-h">
+    <h2 id="find-h">Find a new image</h2>
+    <form class="inline-form" hx-get="/images/{{ recipe.slug }}/search" hx-target="#candidates" hx-swap="outerHTML" hx-indicator="#find-btn">
+      <label class="field grow">
+        <span class="label">Search words</span>
+        <input type="text" name="q" value="{{ recipe.name }}" maxlength="120">
+      </label>
+      <button type="submit" class="btn btn-primary" id="find-btn">Find images</button>
+    </form>
+    <div id="candidates" class="candidates">
+      <p class="muted">Searches the web (DuckDuckGo) for photos of this dish. Tap one to use it.</p>
+    </div>
+
+    <h3>Or paste an image address</h3>
+    <form class="inline-form" method="post" action="/images/{{ recipe.slug }}/set"
+          hx-post="/images/{{ recipe.slug }}/set" hx-target="#current-image" hx-swap="outerHTML" hx-indicator="#paste-btn">
+      <label class="field grow">
+        <span class="label">Image address</span>
+        <input type="url" name="url" placeholder="https://…/photo.jpg" required>
+      </label>
+      <button type="submit" class="btn" id="paste-btn">Use this image</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="crumb">{% if active == "generate" %}<a href="/generate">Generate</a>{% else %}<a href="/maintenance">Maintenance</a>{% endif %} /</p>
+    <h1>{{ job.title }}</h1>
+  </div>
+</div>
+{% if busy %}
+<div class="alert alert-info" role="status">A job of this kind was already running, so a second one wasn't started. This is the one in progress.</div>
+{% endif %}
+{% include "jobs/_job.html" %}
+{% endblock %}

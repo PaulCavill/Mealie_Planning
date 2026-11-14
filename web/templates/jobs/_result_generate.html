@@ -1,0 +1,51 @@
+{% from "_macros.html" import effort_badge %}
+{% set recipes = job.result.recipes %}
+<section class="card">
+  <h2>Review {{ recipes | length }} generated recipe{{ "" if recipes | length == 1 else "s" }}</h2>
+  <p class="muted">Tick the ones to keep. Importing adds them to Mealie as dinners, with an effort rating, a cover image and parsed ingredients.
+    {% if recipes | length < job.result.requested %}Claude returned {{ recipes | length }} of the {{ job.result.requested }} asked for.{% endif %}</p>
+  <form method="post" action="/generate/{{ job.id }}/import" data-busy>
+    <div class="select-all">
+      <button type="button" class="btn btn-small" data-check-all="true">Select all</button>
+      <button type="button" class="btn btn-small" data-check-all="false">Select none</button>
+    </div>
+    <ul class="review-list">
+      {% for r in recipes %}
+      <li class="review">
+        <label class="review-head">
+          <input type="checkbox" name="pick" value="{{ loop.index0 }}" checked>
+          <span class="review-title">
+            <strong>{{ r.name }}</strong>
+            <span class="row-meta">
+              {% if r.recipeCuisine %}<span class="badge muted-badge">{{ r.recipeCuisine }}</span>{% endif %}
+              {{ effort_badge(r.effort if r.effort is integer else none, unrated=True) }}
+              {% if r.totalTime %}<span class="meta-text">{{ r.totalTime | cook_time }}</span>{% endif %}
+            </span>
+          </span>
+        </label>
+        {% if r.description %}<p class="review-desc">{{ r.description }}</p>{% endif %}
+        <details>
+          <summary>Ingredients and steps</summary>
+          <div class="review-body">
+            <div>
+              <h4>Ingredients</h4>
+              <ul>{% for i in r.recipeIngredient or [] %}<li>{{ i }}</li>{% endfor %}</ul>
+            </div>
+            <div>
+              <h4>Steps</h4>
+              <ol>{% for s in r.recipeInstructions or [] %}<li>{{ s.text if s is mapping else s }}</li>{% endfor %}</ol>
+            </div>
+          </div>
+        </details>
+        {% if r.url is string and r.url.startswith(("http://", "https://")) %}
+        <p class="review-source">Source: <a href="{{ r.url }}" target="_blank" rel="noopener noreferrer">{{ r.url }}</a></p>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Import selected</button>
+      <a class="btn btn-ghost" href="/generate">Discard all</a>
+    </div>
+  </form>
+</section>

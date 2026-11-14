@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_pill %}
+{% block title %}Maintenance{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Maintenance</h1>
+    <p class="muted">Housekeeping for the recipe library, and a record of background jobs.</p>
+  </div>
+</div>
+
+<section class="card" aria-labelledby="parse-h">
+  <h2 id="parse-h">Parse all ingredients</h2>
+  <p>Turns ingredient text like “500 g chicken thighs, diced” into an amount, unit and food for every recipe,
+    using Mealie's parser. Shopping lists can only combine and scale ingredients that have been parsed.
+    Only lines that are still plain text are parsed; ingredients that already have a food are left exactly as they are.</p>
+  {% if running %}
+  <div class="alert alert-info" role="status">
+    <strong>Parsing is running.</strong> <a href="/jobs/{{ running.id }}">Watch its progress</a>
+  </div>
+  {% else %}
+  <form method="post" action="/maintenance/parse" class="actions" data-busy>
+    <button type="submit" class="btn btn-primary"{% if not mealie_ready %} disabled{% endif %}>Parse all ingredients</button>
+    <span class="muted small">Takes a minute or two for a large library. Safe to run again.</span>
+  </form>
+  {% endif %}
+</section>
+
+<section class="card" aria-labelledby="hist-h">
+  <h2 id="hist-h">Job history</h2>
+  {% if history %}
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Job</th><th>Started</th><th>Took</th><th>Status</th><th><span class="sr-only">Details</span></th></tr></thead>
+      <tbody>
+        {% for job in history %}
+        <tr>
+          <td data-label="Job"><strong>{{ job.title }}</strong><div class="muted small">{{ kind_labels.get(job.kind, job.kind) }}</div></td>
+          <td data-label="Started">{{ (job.started_at or job.created_at) | clock }}</td>
+          <td data-label="Took">{{ job.duration | elapsed }}</td>
+          <td data-label="Status">{{ status_pill(job.status) }}</td>
+          <td class="cell-action"><a class="btn btn-small" href="/jobs/{{ job.id }}">View log</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty small"><p>No jobs have run yet. Generating recipes, importing and parsing ingredients will show up here.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

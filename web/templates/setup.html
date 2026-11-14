@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% set hide_config_banner = True %}
+{% block title %}Set up{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Connect the planner to Mealie</h1>
+  <p class="lead">This app needs to know where your Mealie is and how to sign in. These are set as
+    environment variables on the container, not on this page.</p>
+  <ul class="checklist">
+    <li class="{{ 'todo' if 'MEALIE_BASE_URL' in config_missing else 'done' }}">
+      <code>MEALIE_BASE_URL</code>
+      <span>The address of Mealie as this app can reach it, for example <code>http://mealie:9000</code>.
+        {% if 'MEALIE_BASE_URL' in config_missing %}<strong>Not set.</strong>{% else %}Set.{% endif %}</span>
+    </li>
+    <li class="{{ 'todo' if 'MEALIE_TOKEN' in config_missing else 'done' }}">
+      <code>MEALIE_TOKEN</code>
+      <span>An API token: in Mealie open your profile, choose <em>API Tokens</em> and create one.
+        {% if 'MEALIE_TOKEN' in config_missing %}<strong>Not set.</strong>{% else %}Set.{% endif %}</span>
+    </li>
+  </ul>
+  <p>With Docker Compose, put them in the <code>.env</code> file next to <code>docker-compose.yml</code>
+    (or under <code>environment:</code>), then restart the container. Optional extras:
+    <code>ANTHROPIC_API_KEY</code> for generating recipes and <code>APP_PASSWORD</code> to require a login.</p>
+  <div class="actions">
+    <a class="btn btn-primary" href="/">Check again</a>
+    <a class="btn" href="/settings">Connection status</a>
+  </div>
+</section>
+{% endblock %}

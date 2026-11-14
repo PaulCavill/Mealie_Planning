@@ -1,0 +1,6 @@
+{% for r in recipes %}{% include "recipes/_row.html" %}{% endfor %}
+{% if has_more %}
+<li class="more-row" id="more-row">
+  <button type="button" class="btn" hx-get="/recipes" hx-vals='{{ {"q": q, "filter": filter, "page": page + 1} | tojson }}' hx-target="#more-row" hx-swap="outerHTML">Show more ({{ total - page * 60 }} left)</button>
+</li>
+{% endif %}

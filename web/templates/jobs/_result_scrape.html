@@ -1,0 +1,41 @@
+{% set results = job.result.results %}
+{% set good = results | selectattr("status", "equalto", "ok") | list %}
+<section class="card">
+  <h2>{{ "Preview" if job.result.dry_run else "Import" }} results</h2>
+  {% if job.result.dry_run %}
+  <div class="alert alert-info" role="status"><strong>Preview only — nothing was imported.</strong> {{ good | length }} of {{ results | length }} page{{ "" if results | length == 1 else "s" }} could be read.</div>
+  {% else %}
+  <div class="alert alert-{{ 'ok' if good | length == results | length else 'warn' }}" role="status"><strong>{{ good | length }} of {{ results | length }} imported.</strong> New recipes are not marked as dinners yet — do that on the Recipes page.</div>
+  {% endif %}
+  <ul class="rows compact">
+    {% for r in results %}
+    <li class="row">
+      <div class="row-main">
+        <div class="row-title">{{ r.name or "Could not read a recipe" if r.status == "ok" else "Failed" }}</div>
+        <div class="row-kicker url">{{ r.url }}</div>
+        {% if r.status == "ok" %}
+        <details>
+          <summary>{{ r.ingredients | length }} ingredient{{ "" if r.ingredients | length == 1 else "s" }}{% if r.steps %} · {{ r.steps }} step{{ "" if r.steps == 1 else "s" }}{% endif %}</summary>
+          <ul>{% for i in r.ingredients %}<li>{{ i }}</li>{% endfor %}</ul>
+        </details>
+        {% else %}
+        <div class="row-warning">Mealie could not read a recipe from this page. {{ r.error }}</div>
+        {% endif %}
+      </div>
+      <div class="row-actions"><span class="pill pill-{{ 'done' if r.status == 'ok' else 'failed' }}">{{ "OK" if r.status == "ok" else "Failed" }}</span></div>
+    </li>
+    {% endfor %}
+  </ul>
+  <div class="actions">
+    {% if job.result.dry_run and good %}
+    <form method="post" action="/generate/scrape" data-busy>
+      <textarea name="urls" hidden>{% for r in good %}{{ r.url }}
+{% endfor %}</textarea>
+      <button type="submit" class="btn btn-primary">Import {{ "this recipe" if good | length == 1 else "these " ~ (good | length) ~ " recipes" }}</button>
+    </form>
+    {% elif not job.result.dry_run %}
+    <a class="btn btn-primary" href="/recipes?filter=not_dinner">Go to recipes</a>
+    {% endif %}
+    <a class="btn" href="/generate">Back to Generate</a>
+  </div>
+</section>

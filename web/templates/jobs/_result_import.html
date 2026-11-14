@@ -1,0 +1,31 @@
+{% from "_macros.html" import effort_badge %}
+{% set results = job.result.results %}
+{% set ok = results | selectattr("status", "equalto", "imported") | list | length %}
+{% set failed = results | selectattr("status", "equalto", "failed") | list | length %}
+{% set skipped = results | selectattr("status", "equalto", "skipped") | list | length %}
+<section class="card">
+  <h2>Import results</h2>
+  <div class="alert alert-{{ 'ok' if not failed else 'warn' }}" role="status">
+    <strong>{{ ok }} imported</strong>{% if skipped %}, {{ skipped }} skipped (already in Mealie){% endif %}{% if failed %}, {{ failed }} failed{% endif %}.
+  </div>
+  <ul class="rows compact">
+    {% for r in results %}
+    <li class="row">
+      <div class="row-main">
+        <div class="row-title">{{ r.name }}</div>
+        <div class="row-meta">
+          <span class="pill pill-{{ {'imported': 'done', 'skipped': 'queued', 'failed': 'failed'}[r.status] }}">{{ r.status | capitalize }}</span>
+          {% if r.cuisine %}<span class="badge muted-badge">{{ r.cuisine }}</span>{% endif %}
+          {{ effort_badge(r.effort) }}
+        </div>
+        {% if r.status == "skipped" %}<div class="muted small">A recipe with this name is already in Mealie.</div>{% endif %}
+        {% if r.error %}<div class="row-warning">{% if r.slug %}Created in Mealie, but a later step failed: {% endif %}{{ r.error }}</div>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  <div class="actions">
+    <a class="btn btn-primary" href="/recipes">Go to recipes</a>
+    <a class="btn" href="/generate">Generate more</a>
+  </div>
+</section>

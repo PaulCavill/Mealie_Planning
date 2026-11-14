@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Plan preview{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="crumb"><a href="/">Plan</a> /</p>
+    <h1>Plan preview</h1>
+    <p class="muted">Starting {{ preview.start | day_long }}. <strong>Nothing has been saved yet</strong> — adjust the days, then save.</p>
+  </div>
+</div>
+
+{% include "plan/_preview_body.html" %}
+
+<div class="savebar">
+  <form method="post" action="/plan/preview/{{ pid }}/commit" class="savebar-main" data-busy>
+    <label class="check">
+      <input type="checkbox" name="shopping_list" value="1"{% if shopping_list %} checked{% endif %}>
+      <span><strong>Create shopping lists</strong><small>One per week, pantry staples left out</small>
+        {% if replaced_lists %}
+        <small class="check-warning">Replaces {{ "the existing list" if replaced_lists | length == 1 else "the existing lists" }}
+          {% for name in replaced_lists %}“{{ name }}”{{ ", " if not loop.last }}{% endfor %} in Mealie —
+          anything ticked off or added by hand there is lost.</small>
+        {% endif %}
+      </span>
+    </label>
+    <button type="submit" class="btn btn-primary">Save to Mealie</button>
+  </form>
+  <form method="post" action="/plan/preview/{{ pid }}/discard">
+    <button type="submit" class="btn btn-ghost">Discard</button>
+  </form>
+</div>
+{% endblock %}

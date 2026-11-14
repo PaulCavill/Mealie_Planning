@@ -1,0 +1,63 @@
+{% from "_macros.html" import icon, effort_badge, thumb %}
+<section id="calendar" class="calendar" aria-label="Meal plan calendar">
+  <div class="cal-nav">
+    <a class="btn btn-small" href="/?start={{ cal.earlier }}">← Earlier</a>
+    {% if not cal.at_today %}<a class="btn btn-small" href="/">Today</a>{% endif %}
+    <a class="btn btn-small" href="/?start={{ cal.later }}">Later →</a>
+  </div>
+
+  {% if cal.empty %}
+  <div class="empty">
+    <h2>Nothing planned in these weeks</h2>
+    <p>Use <strong>Generate a plan</strong> above to fill them, or add a dinner to any day below.</p>
+  </div>
+  {% endif %}
+
+  {% for week in cal.weeks %}
+  <section class="week{% if week.is_current %} week-current{% endif %}">
+    <header class="week-head">
+      <h2>{% if week.is_current %}This week{% else %}Week of {{ week.start | day_short }}{% endif %}</h2>
+      <span class="muted">{{ week.start | day_short }} – {{ week.end | day_short }} · {{ week.planned }} dinner{{ "" if week.planned == 1 else "s" }}</span>
+    </header>
+    <ol class="week-grid">
+      {% for day in week.days %}
+      {% set d = day.dinner %}
+      <li class="day{% if day.is_today %} is-today{% endif %}{% if day.is_past %} is-past{% endif %}{% if not d %} is-empty{% endif %}{% if not d and not day.plan_day and not day.others %} is-quiet{% endif %}{% if changed == day.iso %} flash{% endif %}">
+        <div class="day-head">
+          <span class="day-name">{{ day.date.strftime("%a") }}</span>
+          <span class="day-date">{{ day.date.day }} {{ day.date.strftime("%b") }}</span>
+          {% if day.is_today %}<span class="today-pill">Today</span>{% endif %}
+        </div>
+        {% if d %}
+        {{ thumb(d.recipe_id, cls="day-thumb") }}
+        <div class="day-body">
+          <div class="day-title">{{ d.recipe_name }}</div>
+          <div class="day-meta">{{ effort_badge(d.effort) }}</div>
+          {% for other in day.others %}
+          <div class="day-other">{{ (other.entry_type or "also") | capitalize }}: {{ other.recipe_name }}</div>
+          {% endfor %}
+        </div>
+        {% if not day.is_past %}
+        <div class="day-actions">
+          <button type="button" class="btn btn-small" hx-get="/plan/swap" hx-vals='{{ {"date": day.iso, "start": cal.start} | tojson }}' hx-target="#modal-body" aria-label="Swap the dinner on {{ day.date | day_long }}">{{ icon("swap") }}<span>Swap</span></button>
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="day-body">
+          <div class="day-none">{{ "Nothing planned" if day.plan_day else "—" }}</div>
+          {% for other in day.others %}
+          <div class="day-other">{{ (other.entry_type or "also") | capitalize }}: {{ other.recipe_name }}</div>
+          {% endfor %}
+        </div>
+        {% if not day.is_past %}
+        <div class="day-actions">
+          <button type="button" class="btn btn-small btn-ghost" hx-get="/plan/swap" hx-vals='{{ {"date": day.iso, "start": cal.start} | tojson }}' hx-target="#modal-body" aria-label="Add a dinner on {{ day.date | day_long }}">{{ icon("plus") }}<span>Add</span></button>
+        </div>
+        {% endif %}
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endfor %}
+</section>

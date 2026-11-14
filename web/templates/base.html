@@ -1,0 +1,52 @@
+{% from "_macros.html" import icon %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}Plan{% endblock %} · Mealie Planner</title>
+  <link rel="icon" href="/static/icon.svg?v={{ static_v }}" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css?v={{ static_v }}">
+  <script src="/static/htmx.min.js?v={{ static_v }}" defer></script>
+  <script src="/static/app.js?v={{ static_v }}" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">
+        <img src="/static/icon.svg?v={{ static_v }}" alt="" width="28" height="28">
+        <span>Mealie Planner</span>
+      </a>
+      <nav class="mainnav" aria-label="Main">
+        {% for key, href, label in nav %}
+        <a href="{{ href }}" class="navlink{% if active == key %} is-active{% endif %}"{% if active == key %} aria-current="page"{% endif %}>
+          {{ icon(key) }}<span>{{ label }}</span>
+        </a>
+        {% endfor %}
+      </nav>
+      {% if auth_enabled %}
+      <form method="post" action="/logout" class="logout">
+        <button type="submit" class="linkbtn">Log out</button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="page">
+    {% if config_missing and not hide_config_banner %}
+    <div class="alert alert-warn" role="status">
+      <strong>Not connected to Mealie yet.</strong>
+      Set {{ config_missing | join(" and ") }} for this app and restart it.
+      {% if active != "settings" %}<a href="/settings">See connection status</a>{% endif %}
+    </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <dialog id="modal" class="modal" aria-label="Choose a recipe">
+    <div id="modal-body"></div>
+  </dialog>
+  <div id="toast" class="toast-area" aria-live="assertive"></div>
+</body>
+</html>

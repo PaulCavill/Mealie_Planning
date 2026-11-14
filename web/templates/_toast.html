@@ -1,0 +1,5 @@
+{% from "_macros.html" import icon %}
+<div class="toast toast-{{ kind }}" role="alert">
+  <span>{{ message }}</span>
+  <button type="button" class="iconbtn" aria-label="Dismiss" data-dismiss>{{ icon("close") }}</button>
+</div>

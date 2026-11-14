@@ -1,0 +1,25 @@
+<div id="image-results">
+  {% if not library_size %}
+  <div class="empty"><h2>No recipes in Mealie yet</h2><p>Once there are recipes, you can choose their photos here.</p></div>
+  {% elif not total %}
+  <div class="empty">
+    <h2>{{ "Every recipe has an image" if missing and not q else "No recipes found" }}</h2>
+    <p>{% if q %}Nothing matches “{{ q }}”.{% else %}Nothing to fix here.{% endif %}</p>
+    <a class="btn" href="/images">Show all recipes</a>
+  </div>
+  {% else %}
+  <p class="result-count muted">{{ total }} recipe{{ "" if total == 1 else "s" }}</p>
+  <ul class="tile-grid">
+    {% for r in recipes %}
+    <li>
+      <a class="tile" href="/images/{{ r.slug }}">
+        <img src="{{ thumb_url(r.id, r.image) }}" alt="" loading="lazy" decoding="async" width="240" height="180">
+        <span class="tile-name">{{ r.name }}</span>
+        {% if not r.image %}<span class="badge del tile-flag">No image</span>{% endif %}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% if more %}<p class="muted">…and {{ more }} more. Search to narrow the list.</p>{% endif %}
+  {% endif %}
+</div>
