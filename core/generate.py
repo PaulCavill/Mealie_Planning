@@ -1,0 +1,153 @@
+"""Claude recipe generation, and importing the generated recipes into Mealie.
+
+Claude writes full schema.org/Recipe JSON for each meal, which Mealie imports
+directly via /api/recipes/create/html-or-json — no URL scraping involved.
+"""
+from __future__ import annotations
+
+import json
+import os
+from typing import Callable
+
+from mealie_client import MealieClient
+from . import images
+from .errors import GenerationError
+from .settings import Settings
+
+Progress = Callable[[str], None]
+
+MAX_EXISTING_NAMES_IN_PROMPT = 30
+
+
+def _valid_effort(recipe: dict) -> int | None:
+    effort = recipe.get("effort")
+    return effort if isinstance(effort, int) and 1 <= effort <= 5 else None
+
+
+def _parse_recipe_array(text: str) -> list[dict]:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    try:
+        data = json.loads(text.strip())
+    except json.JSONDecodeError as e:
+        raise GenerationError(f"Claude did not return valid JSON: {e}") from e
+    if not isinstance(data, list):
+        raise GenerationError("Claude did not return a JSON array of recipes")
+    return [r for r in data if isinstance(r, dict) and r.get("name")]
+
+
+def _generate_batch(ai_client, settings: Settings, batch: int, existing: list[str], restrictions: str) -> list[dict]:
+    existing_str = ", ".join(existing[:MAX_EXISTING_NAMES_IN_PROMPT]) if existing else "none"
+    user_msg = f"Generate exactly {batch} dinner recipes. Return ONLY the JSON array, no other text."
+    if restrictions:
+        user_msg += f" Additional restriction: {restrictions}."
+    response = ai_client.messages.create(
+        model=settings.claude_model,
+        max_tokens=8192,
+        system=settings.render_system_prompt(existing_str),
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    return _parse_recipe_array(response.content[0].text)
+
+
+def generate_recipes(
+    settings: Settings,
+    existing_names: list[str],
+    count: int | None = None,
+    restrictions: str = "",
+    progress: Progress | None = None,
+    ai_client=None,
+) -> list[dict]:
+    """Ask Claude for `count` dinner recipes (default settings.suggest_count).
+
+    Returns schema.org/Recipe dicts, each with an extra integer `effort` 1-5.
+    Nothing is written to Mealie. May return fewer than `count` if Claude
+    repeats itself. `ai_client` is an anthropic.Anthropic instance; by default
+    one is created from ANTHROPIC_API_KEY.
+    """
+    count = settings.suggest_count if count is None else count
+    if ai_client is None:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise GenerationError("ANTHROPIC_API_KEY is not set")
+        import anthropic
+        ai_client = anthropic.Anthropic(api_key=api_key)
+
+    if progress:
+        progress(f"Asking Claude to generate {count} recipes (in batches of {settings.batch_size})...")
+    recipes: list[dict] = []
+    seen: set[str] = set()
+    remaining = count
+    while remaining > 0:
+        batch = min(remaining, settings.batch_size)
+        exclude = list(existing_names) + [r["name"] for r in recipes]
+        for recipe in _generate_batch(ai_client, settings, batch, exclude, restrictions):
+            if recipe["name"].lower() not in seen:
+                recipes.append(recipe)
+                seen.add(recipe["name"].lower())
+        remaining -= batch
+        if progress:
+            progress(f"...{len(recipes)}/{count} generated")
+    return recipes
+
+
+def _create_from_json(client: MealieClient, recipe: dict) -> dict:
+    slug = client.post("/api/recipes/create/html-or-json", json={"data": json.dumps(recipe)})
+    slug = slug.strip('"') if isinstance(slug, str) else slug
+    return client.get_recipe(slug)
+
+
+def import_recipes(
+    client: MealieClient,
+    settings: Settings,
+    recipes: list[dict],
+    progress: Progress | None = None,
+) -> list[dict]:
+    """Import generated recipes into Mealie: create, tag dinner + effort, find a
+    cover image, parse ingredients. Recipes whose name already exists are skipped.
+
+    Returns one dict per recipe: {name, status: "imported"|"skipped"|"failed",
+    slug, cuisine, effort, source_url, error}. A "failed" recipe with a slug was
+    created in Mealie but a later step (e.g. ingredient parsing) failed.
+    """
+    existing = {r["name"].lower() for r in client.list_recipes()}
+    results = []
+    with client.cached_lookups():
+        for recipe in recipes:
+            name = recipe.get("name", "Unknown")
+            cuisine = recipe.get("recipeCuisine", "")
+            effort = _valid_effort(recipe)
+            source_url = recipe.get("url")
+            result = {"name": name, "status": "imported", "slug": None, "cuisine": cuisine,
+                      "effort": effort, "source_url": source_url, "error": None}
+            results.append(result)
+
+            if name.lower() in existing:
+                result["status"] = "skipped"
+                if progress:
+                    progress(f"SKIP: '{name}' — already exists in Mealie")
+                continue
+
+            try:
+                imported = _create_from_json(client, recipe)
+                slug = result["slug"] = imported.get("slug")
+                result["name"] = imported.get("name", name)
+                existing.add(name.lower())
+                client.add_tag(slug, "dinner")
+                if effort:
+                    client.set_effort_tag(slug, effort)
+                images.auto_set_image(client, slug, name, recipe.get("recipeIngredient", []))
+                client.update_recipe_ingredients(slug)
+                if progress:
+                    effort_str = f" effort-{effort}" if effort else ""
+                    source_note = f" [source: {source_url}]" if source_url else ""
+                    progress(f"OK: '{result['name']}' ({cuisine}){effort_str}{source_note}")
+            except Exception as e:
+                result["status"] = "failed"
+                result["error"] = str(e)
+                if progress:
+                    progress(f"FAIL: {name} — {e}")
+    return results

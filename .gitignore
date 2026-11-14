@@ -5,3 +5,6 @@ mealie_client/__pycache__/
 CLAUDE.md
 Weekly_Task.md
 
+data/
+.pytest_cache/
+__pycache__/

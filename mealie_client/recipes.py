@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 import re
-import requests
 
 if TYPE_CHECKING:
     from .client import MealieClient
@@ -48,18 +47,20 @@ def parse_ingredient_note(note: str) -> dict:
 
 
 
+class IngredientSaveError(RuntimeError):
+    """Mealie refused to save a recipe after its ingredients were parsed."""
+
+
 class RecipesMixin:
     """Recipe operations mixed into MealieClient."""
 
-    def list_recipes(self: "MealieClient", page: int = 1, per_page: int = 50, tag: str = None) -> list[dict]:
-        params = {"page": page, "perPage": per_page}
-        if tag:
-            params["tags"] = tag
-        data = self.get("/api/recipes", **params)
-        return data.get("items", [])
+    def list_recipes(self: "MealieClient", tag: str = None, per_page: int = 200) -> list[dict]:
+        """Every recipe summary (all pages), optionally filtered by tag."""
+        params = {"tags": tag} if tag else {}
+        return self.get_all("/api/recipes", per_page=per_page, **params)
 
-    def list_dinner_recipes(self: "MealieClient", per_page: int = 200) -> list[dict]:
-        return self.list_recipes(per_page=per_page, tag="dinner")
+    def list_dinner_recipes(self: "MealieClient") -> list[dict]:
+        return self.list_recipes(tag="dinner")
 
     def get_recipe(self: "MealieClient", slug: str) -> dict:
         return self.get(f"/api/recipes/{slug}")
@@ -81,7 +82,6 @@ class RecipesMixin:
 
     def add_tag(self: "MealieClient", slug: str, tag_name: str) -> dict:
         """Add a tag to a recipe by name, creating the tag if needed."""
-        # Ensure tag exists
         tag = self._get_or_create_tag(tag_name)
         recipe = self.get_recipe(slug)
         existing_tags = recipe.get("tags") or []
@@ -92,24 +92,36 @@ class RecipesMixin:
         self.put(f"/api/recipes/{slug}", json=recipe)
         return self.get_recipe(slug)
 
-    def set_effort_tag(self: "MealieClient", slug: str, effort: int) -> None:
-        """Set the effort-N tag (1-5) on a recipe, removing any existing effort tags."""
+    def remove_tag(self: "MealieClient", slug: str, tag_name: str) -> dict:
+        """Remove a tag from a recipe by name. No-op if the recipe doesn't have it."""
+        recipe = self.get_recipe(slug)
+        existing_tags = recipe.get("tags") or []
+        kept_tags = [t for t in existing_tags if t["name"] != tag_name]
+        if len(kept_tags) == len(existing_tags):
+            return recipe
+        recipe["tags"] = kept_tags
+        self.put(f"/api/recipes/{slug}", json=recipe)
+        return self.get_recipe(slug)
+
+    def set_effort_tag(self: "MealieClient", slug: str, effort: int | None) -> None:
+        """Set the effort-N tag (1-5) on a recipe, removing any existing effort tags.
+
+        Passing None just removes the existing effort tags.
+        """
         effort_names = {f"effort-{i}" for i in range(1, 6)}
-        tag = self._get_or_create_tag(f"effort-{effort}")
+        tag = self._get_or_create_tag(f"effort-{effort}") if effort is not None else None
         recipe = self.get_recipe(slug)
         kept_tags = [t for t in (recipe.get("tags") or []) if t["name"] not in effort_names]
-        kept_tags.append({"id": tag["id"], "name": tag["name"], "slug": tag["slug"]})
+        if tag:
+            kept_tags.append({"id": tag["id"], "name": tag["name"], "slug": tag["slug"]})
         recipe["tags"] = kept_tags
         self.put(f"/api/recipes/{slug}", json=recipe)
 
     def _get_or_create_tag(self: "MealieClient", name: str) -> dict:
-        data = self.get("/api/organizers/tags", perPage=100)
-        for t in data.get("items", []):
-            if t["name"].lower() == name.lower():
-                return t
-        return self.post("/api/organizers/tags", json={"name": name})
+        return self._get_or_create_named("/api/organizers/tags", name, {"name": name})
 
-    def _upload_image_bytes(self, slug: str, content: bytes, content_type: str) -> bool:
+    def upload_recipe_image(self: "MealieClient", slug: str, content: bytes, content_type: str) -> None:
+        """Set a recipe's cover image from raw image bytes."""
         ext = "png" if "png" in content_type else "jpg"
         self.put_multipart(
             f"/api/recipes/{slug}/image",
@@ -118,59 +130,6 @@ class RecipesMixin:
                 "extension": (None, ext),
             },
         )
-        return True
-
-    def add_cover_image(self: "MealieClient", slug: str, recipe_name: str,
-                        cuisine: str = "", ingredients: list[str] | None = None,
-                        image_url: str | None = None) -> bool:
-        """Upload a cover image from a specific URL, or search DuckDuckGo if none given."""
-        if image_url:
-            try:
-                img = requests.get(image_url, allow_redirects=True, timeout=15,
-                                   headers={"User-Agent": "Mozilla/5.0"})
-                img.raise_for_status()
-                content_type = img.headers.get("content-type", "image/jpeg")
-                if not content_type.startswith("image/"):
-                    return False
-                return self._upload_image_bytes(slug, img.content, content_type)
-            except Exception:
-                return False
-
-        from ddgs import DDGS
-        ingredient_hint = ""
-        if ingredients:
-            def _ingredient_str_local(i):
-                if isinstance(i, dict):
-                    food = i.get("food")
-                    return food.get("name", "") if isinstance(food, dict) else str(food or "")
-                return str(i)
-            hints = [_ingredient_str_local(i).split(",")[0].split()[-1]
-                     for i in ingredients[:2] if _ingredient_str_local(i)]
-            if hints:
-                ingredient_hint = " " + " ".join(hints)
-        query = f"{recipe_name}{ingredient_hint} food recipe"
-        try:
-            results = DDGS().images(query, max_results=10)
-        except Exception:
-            return False
-
-        for result in results:
-            url = result.get("image", "")
-            if not url.startswith("http"):
-                continue
-            try:
-                img = requests.get(url, allow_redirects=True, timeout=15,
-                                   headers={"User-Agent": "Mozilla/5.0"})
-                img.raise_for_status()
-                content_type = img.headers.get("content-type", "")
-                if not content_type.startswith("image/"):
-                    continue
-                if len(img.content) < 20_000:  # skip tiny/placeholder images
-                    continue
-                return self._upload_image_bytes(slug, img.content, content_type)
-            except Exception:
-                continue
-        return False
 
     def search_recipes(self: "MealieClient", query: str) -> list[dict]:
         data = self.get("/api/recipes", search=query, perPage=20)
@@ -260,14 +219,9 @@ class RecipesMixin:
         # PUT the updated recipe back
         try:
             self.put(f"/api/recipes/{slug}", json=recipe)
-            return recipe
         except Exception as e:
-            print(f"\n⚠️  ERROR: Failed to save parsed ingredients for '{recipe.get('name')}'")
-            print(f"   Error: {e}")
-            print(f"\n   Parsed ingredients are ready but couldn't be saved to database.")
-            print(f"   Please:")
-            print(f"   1. Confirm the recipe state in Mealie UI")
-            print(f"   2. Check if there are data issues preventing the update")
-            print(f"   3. Manually parse ingredients via Mealie's parser UI if needed")
-            print(f"   Recipe: {recipe.get('name')} ({slug})\n")
-            raise
+            raise IngredientSaveError(
+                f"Parsed the ingredients for '{recipe.get('name')}' ({slug}) but Mealie rejected the save: {e}. "
+                "Check the recipe in the Mealie UI and parse it there if needed."
+            ) from e
+        return recipe

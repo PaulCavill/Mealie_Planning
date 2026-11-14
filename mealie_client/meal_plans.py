@@ -18,8 +18,7 @@ class MealPlansMixin:
             params["start_date"] = start_date.isoformat()
         if end_date:
             params["end_date"] = end_date.isoformat()
-        data = self.get("/api/households/mealplans", **params)
-        return data.get("items", [])
+        return self.get_all("/api/households/mealplans", **params)
 
     def get_this_week(self: "MealieClient") -> list[dict]:
         today = date.today()

@@ -9,8 +9,7 @@ class ShoppingMixin:
     """Shopping list operations mixed into MealieClient."""
 
     def list_shopping_lists(self: "MealieClient") -> list[dict]:
-        data = self.get("/api/households/shopping/lists")
-        return data.get("items", [])
+        return self.get_all("/api/households/shopping/lists")
 
     def get_shopping_list(self: "MealieClient", list_id: str) -> dict:
         return self.get(f"/api/households/shopping/lists/{list_id}")
@@ -30,8 +29,9 @@ class ShoppingMixin:
         )
 
     def get_list_items(self: "MealieClient", list_id: str) -> list[dict]:
-        data = self.get("/api/households/shopping/items", shoppingListId=list_id)
-        return data.get("items", [])
+        items = self.get_all("/api/households/shopping/items", shoppingListId=list_id)
+        # Never hand back another list's items, even if the server ignores the filter.
+        return [i for i in items if i.get("shoppingListId", list_id) == list_id]
 
     def add_list_item(self: "MealieClient", list_id: str, note: str, quantity: float = 1.0) -> dict:
         return self.post(
